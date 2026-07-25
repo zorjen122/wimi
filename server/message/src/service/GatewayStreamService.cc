@@ -11,6 +11,7 @@
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace wimi::rpc {
@@ -163,138 +164,10 @@ class GatewayStreamReactor final
     // gRPC 流线程只负责收发和轻量分发，真正消息服务逻辑在线程池里跑。
     const std::string originGatewayId = gatewayId;
     const std::string originInstanceId = instanceId;
-    auto *originReactor = this;
-    auto *streamService = &service;
     auto accepted = Service::GetInstance()->PostBackgroundTask(
-        [streamService, originGatewayId, originInstanceId, originReactor,
-         command = std::move(command)]() mutable {
-          const auto remaining = std::chrono::milliseconds(
-              command.deadline_unix_ms() - NowUnixMilliseconds());
-          RequestContext context = RequestContext::WithTimeout(
-              command.request_id().empty() ? RequestContext::NextRequestId()
-                                           : command.request_id(),
-              getServiceIdString(command.service_id()), RequestSource::Rpc,
-              command.actor_uid(), remaining);
-          RequestContextScope contextScope(context);
-
-          TcpPacket packet;
-          gateway::MessageToGatewayFrame responseFrame;
-          auto *response = responseFrame.mutable_command_result();
-          response->set_request_id(command.request_id());
-          response->set_response_service_id(
-              __getServiceResponseId(ServiceID(command.service_id())));
-
-          if (context.Expired()) {
-            auto error = MakeErrorPacket(
-                ErrorCodes::DeadlineExceeded,
-                "command expired while waiting for a message worker");
-            response->set_error(ErrorCodes::DeadlineExceeded);
-            response->set_retryable(true);
-            response->set_packet(SerializeTcpPacket(error));
-            streamService->Reply(originGatewayId, originInstanceId,
-                                 originReactor, std::move(responseFrame));
-            return;
-          }
-
-          // 接着查 Redis 里的在线 lease：目的是验证/对齐它和 Gateway
-          // 传来的身份完全一致
-          // 除了保证连接本身的一致性，也是防旧连接、旧登录、伪造连接继续发命令。
-          // 用户重新登录后，旧连接 generation 不匹配，Message 端会拒绝。
-          auto actorLease =
-              db::RedisDao::GetInstance()->getSessionLease(command.actor_uid());
-          if (actorLease.empty() || actorLease.gatewayId != originGatewayId ||
-              actorLease.instanceId != originInstanceId ||
-              actorLease.connectionId != command.connection_id() ||
-              actorLease.generation != command.connection_generation()) {
-            auto error =
-                MakeErrorPacket(ErrorCodes::AuthenticationRequired,
-                                "connection generation is no longer current");
-            response->set_error(ErrorCodes::AuthenticationRequired);
-            response->set_retryable(false);
-            response->set_packet(SerializeTcpPacket(error));
-            streamService->Reply(originGatewayId, originInstanceId,
-                                 originReactor, std::move(responseFrame));
-            return;
-          }
-
-          // 接着解析原始 TCP 业务包并进入业务层
-          // Gateway 传来的 command.packet() 是 TCP packet 序列化结果。
-          if (!ParseTcpPacket(command.packet(), packet)) {
-            auto error = MakeErrorPacket(ErrorCodes::JsonParser);
-            response->set_error(ErrorCodes::JsonParser);
-            response->set_retryable(false);
-            response->set_packet(SerializeTcpPacket(error));
-            streamService->Reply(originGatewayId, originInstanceId,
-                                 originReactor, std::move(responseFrame));
-            return;
-          }
-          packet.set_uid(command.actor_uid());
-
-          if (command.service_id() == ID_TEXT_SEND_REQ) {
-            auto acceptedText = Service::GetInstance()->Messages().AcceptText(
-                std::move(packet));
-            response->set_error(TcpPacketError(acceptedText.response));
-            response->set_retryable(acceptedText.response.retryable());
-            response->set_packet(SerializeTcpPacket(acceptedText.response));
-            streamService->Reply(originGatewayId, originInstanceId,
-                                 originReactor, std::move(responseFrame));
-
-            if (acceptedText.shouldDeliver) {
-              gateway::DeliveryEnvelope delivery;
-              delivery.set_delivery_id(
-                  std::to_string(acceptedText.response.message_id()) + ":" +
-                  std::to_string(acceptedText.recipientUid));
-              delivery.set_recipient_uid(acceptedText.recipientUid);
-              delivery.set_protocol_id(ID_TEXT_SEND_REQ);
-              delivery.set_message_id(acceptedText.response.message_id());
-              delivery.set_conversation_id(
-                  acceptedText.response.conversation_id());
-              delivery.set_conversation_seq(
-                  acceptedText.response.conversation_seq());
-              delivery.set_packet(SerializeTcpPacket(acceptedText.delivery));
-              streamService->DeliverToUser(acceptedText.recipientUid,
-                                           std::move(delivery));
-            }
-            return;
-          }
-
-          if (command.service_id() == ID_GROUP_TEXT_SEND_REQ) {
-            auto acceptedText =
-                Service::GetInstance()->Messages().AcceptGroupText(
-                    std::move(packet));
-            response->set_error(TcpPacketError(acceptedText.response));
-            response->set_retryable(acceptedText.response.retryable());
-            response->set_packet(SerializeTcpPacket(acceptedText.response));
-            streamService->Reply(originGatewayId, originInstanceId,
-                                 originReactor, std::move(responseFrame));
-
-            if (acceptedText.shouldDeliver) {
-              for (const int64_t recipientUid : acceptedText.recipientUids) {
-                gateway::DeliveryEnvelope delivery;
-                delivery.set_delivery_id(
-                    std::to_string(acceptedText.response.message_id()) + ":" +
-                    std::to_string(recipientUid));
-                delivery.set_recipient_uid(recipientUid);
-                delivery.set_protocol_id(ID_GROUP_TEXT_SEND_REQ);
-                delivery.set_message_id(acceptedText.response.message_id());
-                delivery.set_conversation_id(
-                    acceptedText.response.conversation_id());
-                delivery.set_conversation_seq(
-                    acceptedText.response.conversation_seq());
-                delivery.set_packet(SerializeTcpPacket(acceptedText.delivery));
-                streamService->DeliverToUser(recipientUid, std::move(delivery));
-              }
-            }
-            return;
-          }
-
-          auto packetResponse = Service::GetInstance()->ExecuteGatewayCommand(
-              command.service_id(), command.actor_uid(), std::move(packet));
-          response->set_error(TcpPacketError(packetResponse));
-          response->set_retryable(isRetryableError(response->error()));
-          response->set_packet(SerializeTcpPacket(packetResponse));
-          streamService->Reply(originGatewayId, originInstanceId, originReactor,
-                               std::move(responseFrame));
+        [this, originGatewayId, originInstanceId, command = std::move(command)]() mutable {
+          HandleBackgroundCommand(originGatewayId, originInstanceId,
+                                  std::move(command));
         });
 
     if (!accepted) {
@@ -309,6 +182,144 @@ class GatewayStreamReactor final
           ErrorCodes::ResourceExhausted, "message worker queue is full")));
       Enqueue(std::move(responseFrame));
     }
+  }
+
+  void HandleBackgroundCommand(const std::string &originGatewayId,
+                               const std::string &originInstanceId,
+                               gateway::CommandEnvelope command) {
+    auto *originReactor = this;
+    auto *streamService = &service;
+    const auto remaining = std::chrono::milliseconds(
+        command.deadline_unix_ms() - NowUnixMilliseconds());
+    RequestContext context = RequestContext::WithTimeout(
+        command.request_id().empty() ? RequestContext::NextRequestId()
+                                     : command.request_id(),
+        getServiceIdString(command.service_id()), RequestSource::Rpc,
+        command.actor_uid(), remaining);
+    RequestContextScope contextScope(context);
+
+    TcpPacket packet;
+    gateway::MessageToGatewayFrame responseFrame;
+    auto *response = responseFrame.mutable_command_result();
+    response->set_request_id(command.request_id());
+    response->set_response_service_id(
+        __getServiceResponseId(ServiceID(command.service_id())));
+    auto reply = [&](int error, bool retryable, std::string errorMessage = {},
+                     std::optional<TcpPacket> replyPacket = std::nullopt) {
+      if (!replyPacket)
+        replyPacket = MakeErrorPacket(error, errorMessage);
+      response->set_error(error);
+      response->set_retryable(retryable);
+      response->set_packet(SerializeTcpPacket(*replyPacket));
+      streamService->Reply(originGatewayId, originInstanceId, originReactor,
+                           std::move(responseFrame));
+    };
+
+    if (context.Expired()) {
+      reply(ErrorCodes::DeadlineExceeded, true,
+            "command expired while waiting for a message worker");
+      return;
+    }
+
+    // 接着查 Redis 里的在线 lease：目的是验证/对齐它和 Gateway
+    // 传来的身份完全一致
+    // 除了保证连接本身的一致性，也是防旧连接、旧登录、伪造连接继续发命令。
+    // 用户重新登录后，旧连接 generation 不匹配，Message 端会拒绝。
+    auto actorLease =
+        db::RedisDao::GetInstance()->getSessionLease(command.actor_uid());
+    if (actorLease.empty() || actorLease.gatewayId != originGatewayId ||
+        actorLease.instanceId != originInstanceId ||
+        actorLease.connectionId != command.connection_id() ||
+        actorLease.generation != command.connection_generation()) {
+      reply(ErrorCodes::AuthenticationRequired, false,
+            "connection generation is no longer current");
+      return;
+    }
+
+    // 接着解析原始 TCP 业务包并进入业务层
+    // Gateway 传来的 command.packet() 是 TCP packet 序列化结果。
+    if (!ParseTcpPacket(command.packet(), packet)) {
+      reply(ErrorCodes::JsonParser, false);
+      return;
+    }
+    packet.set_uid(command.actor_uid());
+
+    if (command.service_id() == ID_ACK) {
+      auto ack = Service::GetInstance()->Messages().Ack(packet);
+      const auto error = TcpPacketError(ack.response);
+      reply(error, isRetryableError(error), {}, ack.response);
+
+      if (ack.shouldForwardRead) {
+        gateway::ClientForwardEnvelope forward;
+        forward.set_forward_id(
+            "read:" + std::to_string(ack.response.message_id()) + ":" +
+            std::to_string(ack.senderUid));
+        forward.set_recipient_uid(ack.senderUid);
+        forward.set_protocol_id(ID_TEXT_READ_RECEIPT_NOTIFY);
+        forward.set_message_id(ack.response.message_id());
+        forward.set_conversation_id(ack.readReceipt.conversation_id());
+        forward.set_conversation_seq(ack.readReceipt.conversation_seq());
+        forward.set_packet(SerializeTcpPacket(ack.readReceipt));
+        streamService->ForwardToUser(ack.senderUid, std::move(forward));
+      }
+      return;
+    }
+
+    if (command.service_id() == ID_TEXT_SEND_REQ) {
+      auto acceptedText =
+          Service::GetInstance()->Messages().AcceptText(std::move(packet));
+      const auto error = TcpPacketError(acceptedText.response);
+      const bool retryable = acceptedText.response.retryable();
+      reply(error, retryable, {}, acceptedText.response);
+
+      // 如果不是一个重复消息，则转发到接收者
+      if (acceptedText.shouldForward) {
+        gateway::ClientForwardEnvelope forward;
+        forward.set_forward_id(
+            std::to_string(acceptedText.response.message_id()) + ":" +
+            std::to_string(acceptedText.recipientUid));
+        forward.set_recipient_uid(acceptedText.recipientUid);
+        forward.set_protocol_id(ID_TEXT_SEND_REQ);
+        forward.set_message_id(acceptedText.response.message_id());
+        forward.set_conversation_id(acceptedText.response.conversation_id());
+        forward.set_conversation_seq(acceptedText.response.conversation_seq());
+        forward.set_packet(SerializeTcpPacket(acceptedText.forwardPacket));
+        streamService->ForwardToUser(acceptedText.recipientUid,
+                                     std::move(forward));
+      }
+      return;
+    }
+
+    if (command.service_id() == ID_GROUP_TEXT_SEND_REQ) {
+      auto acceptedText =
+          Service::GetInstance()->Messages().AcceptGroupText(std::move(packet));
+      const auto error = TcpPacketError(acceptedText.response);
+      const bool retryable = acceptedText.response.retryable();
+      reply(error, retryable, {}, acceptedText.response);
+
+      if (acceptedText.shouldForward) {
+        for (const int64_t recipientUid : acceptedText.recipientUids) {
+          gateway::ClientForwardEnvelope forward;
+          forward.set_forward_id(
+              std::to_string(acceptedText.response.message_id()) + ":" +
+              std::to_string(recipientUid));
+          forward.set_recipient_uid(recipientUid);
+          forward.set_protocol_id(ID_GROUP_TEXT_SEND_REQ);
+          forward.set_message_id(acceptedText.response.message_id());
+          forward.set_conversation_id(acceptedText.response.conversation_id());
+          forward.set_conversation_seq(
+              acceptedText.response.conversation_seq());
+          forward.set_packet(SerializeTcpPacket(acceptedText.forwardPacket));
+          streamService->ForwardToUser(recipientUid, std::move(forward));
+        }
+      }
+      return;
+    }
+
+    auto packetResponse = Service::GetInstance()->ExecuteGatewayCommand(
+        command.service_id(), command.actor_uid(), std::move(packet));
+    const auto error = TcpPacketError(packetResponse);
+    reply(error, isRetryableError(error), {}, packetResponse);
   }
 
   void FinishOnce() {
@@ -370,26 +381,26 @@ void GatewayStreamService::Unregister(const std::string &gatewayId,
            gatewayId, instanceId);
 }
 
-bool GatewayStreamService::Deliver(const db::SessionLease &lease,
-                                   gateway::DeliveryEnvelope envelope) {
+bool GatewayStreamService::Forward(const db::SessionLease &lease,
+                                   gateway::ClientForwardEnvelope envelope) {
   std::lock_guard<std::mutex> lock(streamsMutex);
   auto found = streams.find(lease.gatewayId);
   if (found == streams.end() || found->second.instanceId != lease.instanceId)
     return false;
   gateway::MessageToGatewayFrame frame;
-  *frame.mutable_delivery() = std::move(envelope);
+  *frame.mutable_client_forward() = std::move(envelope);
   return found->second.reactor->Enqueue(std::move(frame));
 }
 
-bool GatewayStreamService::DeliverToUser(int64_t recipientUid,
-                                         gateway::DeliveryEnvelope envelope) {
+bool GatewayStreamService::ForwardToUser(
+    int64_t recipientUid, gateway::ClientForwardEnvelope envelope) {
   auto lease = db::RedisDao::GetInstance()->getSessionLease(recipientUid);
   if (lease.empty())
     return false;
   envelope.set_recipient_uid(recipientUid);
   envelope.set_expected_connection_id(lease.connectionId);
   envelope.set_expected_connection_generation(lease.generation);
-  if (Deliver(lease, envelope))
+  if (Forward(lease, envelope))
     return true;
 
   auto refreshed = db::RedisDao::GetInstance()->getSessionLease(recipientUid);
@@ -400,7 +411,7 @@ bool GatewayStreamService::DeliverToUser(int64_t recipientUid,
     return false;
   envelope.set_expected_connection_id(refreshed.connectionId);
   envelope.set_expected_connection_generation(refreshed.generation);
-  return Deliver(refreshed, std::move(envelope));
+  return Forward(refreshed, std::move(envelope));
 }
 
 bool GatewayStreamService::Reply(const std::string &gatewayId,

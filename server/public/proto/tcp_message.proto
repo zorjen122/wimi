@@ -10,12 +10,11 @@ enum MessageState {
   MESSAGE_STATE_READ = 3;        // 接收方客户端已确认已读
 }
 
-// TRANSPORT 只确认通知传输，DELIVERED/READ 才更新消息状态。
+// DELIVERED/READ 分别确认客户端已持久化和用户已读。
 enum ReceiptType {
   RECEIPT_TYPE_UNSPECIFIED = 0; // 未指定回执类型
   RECEIPT_TYPE_DELIVERED = 1;   // 业务送达回执
   RECEIPT_TYPE_READ = 2;        // 业务已读回执
-  RECEIPT_TYPE_TRANSPORT = 3;   // Gateway 物理传输确认
 }
 
 message UserInfo {

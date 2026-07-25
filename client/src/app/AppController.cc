@@ -1022,6 +1022,13 @@ void AppController::HandleGatewayResponse(const QString &requestId,
                          return message.messageId == item.messageId();
                        });
       if (duplicate != stored.cend()) {
+        if (item.from() == authenticated_uid_) {
+          UpdateMessageState(
+              duplicate->clientMessageId,
+              item.status() >= 3   ? MessageDeliveryState::Read
+              : item.status() >= 2 ? MessageDeliveryState::Delivered
+                                   : MessageDeliveryState::Accepted);
+        }
         continue;
       }
       additions.push_back(MessageRecord{
@@ -1100,6 +1107,27 @@ void AppController::HandleGatewayPush(quint32 serviceId,
     return;
   }
 
+  if (serviceId == protocol::TextReadReceiptNotification) {
+    if (!packet.hasMessageId() || !packet.hasSeq()) {
+      SetServiceActionStatus(tr("收到不完整的已读通知"));
+      return;
+    }
+    const auto messageId = static_cast<std::int64_t>(packet.messageId());
+    for (const auto &stored : snapshot_.messagesByConversation) {
+      const auto message = std::find_if(
+          stored.cbegin(), stored.cend(), [messageId](const MessageRecord &item) {
+            return item.outgoing && item.messageId == messageId;
+          });
+      if (message == stored.cend()) {
+        continue;
+      }
+      UpdateMessageState(message->clientMessageId, MessageDeliveryState::Read);
+      break;
+    }
+    gateway_client_.AcknowledgeDelivered(packet.seq(), 0, 0);
+    return;
+  }
+
   if (serviceId == protocol::SendTextRequest ||
       serviceId == protocol::SendGroupTextRequest) {
     const bool group = serviceId == protocol::SendGroupTextRequest;
@@ -1125,7 +1153,14 @@ void AppController::HandleGatewayPush(quint32 serviceId,
                       return message.messageId == messageId;
                     });
     if (duplicate) {
-      gateway_client_.AcknowledgeTransport(messageId);
+      gateway_client_.AcknowledgeDelivered(
+          messageId,
+          packet.hasConversationId()
+              ? static_cast<std::int64_t>(packet.conversationId())
+              : 0,
+          packet.hasConversationSeq()
+              ? static_cast<std::int64_t>(packet.conversationSeq())
+              : 0);
       return;
     }
     MessageRecord incoming{
@@ -1165,7 +1200,6 @@ void AppController::HandleGatewayPush(quint32 serviceId,
       conversation.timestamp = previewTimestamp;
       break;
     }
-    gateway_client_.AcknowledgeTransport(messageId);
     if (packet.hasConversationId() && packet.hasConversationSeq()) {
       gateway_client_.AcknowledgeDelivered(messageId, packet.conversationId(),
                                            packet.conversationSeq());
@@ -1212,7 +1246,7 @@ void AppController::HandleGatewayPush(quint32 serviceId,
     requests_.SetRecords(snapshot_.requests);
     repository_->ReplaceRequests(snapshot_.requests);
     if (packet.hasSeq()) {
-      gateway_client_.AcknowledgeTransport(packet.seq());
+      gateway_client_.AcknowledgeDelivered(packet.seq(), 0, 0);
     }
     return;
   }
@@ -1220,7 +1254,7 @@ void AppController::HandleGatewayPush(quint32 serviceId,
   if (serviceId == protocol::ReplyFriendRequest ||
       serviceId == protocol::ReplyJoinGroupRequest) {
     if (packet.hasSeq()) {
-      gateway_client_.AcknowledgeTransport(packet.seq());
+      gateway_client_.AcknowledgeDelivered(packet.seq(), 0, 0);
     }
     gateway_client_.PullFriendList();
     gateway_client_.PullFriendApplications();

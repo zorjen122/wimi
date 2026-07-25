@@ -6,7 +6,7 @@
 #include <spdlog/spdlog.h>
 
 #include "Const.h"
-#include "DeliveryService.h"
+#include "ClientForwardService.h"
 #include "FileService.h"
 #include "FriendService.h"
 #include "GroupService.h"
@@ -28,7 +28,7 @@ class Service : public Singleton<Service> {
 
   ~Service();
   bool PostBackgroundTask(ThreadPool::Task task);
-  DeliveryService &Deliveries();
+  ClientForwardService &ClientForwards();
   MessageService &Messages();
   void SetGatewayStreamService(rpc::GatewayStreamService *service);
   TcpPacket ExecuteGatewayCommand(uint32_t msgID, int64_t actorUid,
@@ -45,7 +45,7 @@ class Service : public Singleton<Service> {
   void Init();
   void RegisterHandle(uint32_t msgID, TaskType taskType, HandleType handle);
 
-  DeliveryService deliveryService;
+  ClientForwardService clientForwardService;
   FriendService friendService;
   GroupService groupService;
   MessageService messageService;

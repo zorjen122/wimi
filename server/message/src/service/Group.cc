@@ -2,7 +2,7 @@
 
 #include "Const.h"
 #include "DbGlobal.h"
-#include "DeliveryService.h"
+#include "ClientForwardService.h"
 #include "Logger.h"
 #include "Mysql.h"
 #include "Redis.h"
@@ -10,8 +10,8 @@
 #include <spdlog/spdlog.h>
 namespace wimi {
 
-GroupService::GroupService(DeliveryService &deliveryService)
-    : deliveryService(deliveryService) {}
+GroupService::GroupService(ClientForwardService &clientForwardService)
+    : clientForwardService(clientForwardService) {}
 
 TcpPacket GroupService::Create(unsigned int msgID, TcpPacket &request) {
   TcpPacket rsp;
@@ -64,9 +64,9 @@ int GroupService::NotifyMemberJoin(int64_t uid, int64_t gid,
     notifyRequest.set_content(requestMessage);
     notifyRequest.set_seq(serverSeq);
     notifyRequest.set_error(ErrorCodes::Success);
-    if (deliveryService.SendGateway(manager->uid,
-                                    SerializeTcpPacket(notifyRequest),
-                                    ID_GROUP_NOTIFY_JOIN_REQ, serverSeq))
+    if (clientForwardService.ForwardToGateway(
+            manager->uid, SerializeTcpPacket(notifyRequest),
+            ID_GROUP_NOTIFY_JOIN_REQ, serverSeq))
       continue;
 
     LOG_DEBUG(businessLogger,
@@ -161,9 +161,9 @@ int GroupService::NotifyMemberReply(int64_t gid, int64_t managerUid,
     notifyRequest.set_gid(gid);
     notifyRequest.set_accept(accept);
     notifyRequest.set_seq(serverSeq);
-    if (deliveryService.SendGateway(member->uid,
-                                    SerializeTcpPacket(notifyRequest),
-                                    ID_GROUP_REPLY_JOIN_REQ, serverSeq))
+    if (clientForwardService.ForwardToGateway(
+            member->uid, SerializeTcpPacket(notifyRequest),
+            ID_GROUP_REPLY_JOIN_REQ, serverSeq))
       continue;
 
     LOG_DEBUG(businessLogger,

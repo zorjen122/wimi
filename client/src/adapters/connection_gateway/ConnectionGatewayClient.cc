@@ -243,13 +243,6 @@ QString ConnectionGatewayClient::SendGroupText(std::int64_t groupId,
   return QueueRequest(protocol::SendGroupTextRequest, std::move(packet));
 }
 
-void ConnectionGatewayClient::AcknowledgeTransport(std::int64_t messageId) {
-  SendReceipt(messageId,
-              static_cast<int>(wimi::protocol::ReceiptTypeGadget::ReceiptType::
-                                   RECEIPT_TYPE_TRANSPORT),
-              0, 0);
-}
-
 void ConnectionGatewayClient::AcknowledgeDelivered(
     std::int64_t messageId, std::int64_t conversationId,
     std::int64_t conversationSequence) {
@@ -392,7 +385,13 @@ void ConnectionGatewayClient::SendReceipt(std::int64_t messageId,
 }
 
 void ConnectionGatewayClient::SendPacket(quint32 serviceId,
-                                         const wimi::protocol::Packet &packet) {
+                                         wimi::protocol::Packet packet) {
+  // QueueRequest already assigns a stable ID before serializing queued business
+  // requests. Direct packets (login, ping, quit, and receipts) pass through
+  // here, so make the Gateway's request_id invariant universal at this boundary.
+  if (!packet.hasRequestId() || packet.requestId().isEmpty()) {
+    packet.setRequestId(NewRequestId());
+  }
   QByteArray payload;
   if (!SerializeProtobufPacket(packet, &payload)) {
     emit ProtocolError(tr("无法序列化 service=%1").arg(serviceId));

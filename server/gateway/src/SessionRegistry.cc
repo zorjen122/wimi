@@ -60,43 +60,43 @@ void SessionRegistry::Remove(int64_t uid,
   db::RedisDao::GetInstance()->clearSessionLease(uid, lease);
 }
 
-gateway::DeliveryStatus SessionRegistry::Deliver(
-    const gateway::DeliveryEnvelope &delivery) {
+gateway::ClientForwardStatus SessionRegistry::Forward(
+    const gateway::ClientForwardEnvelope &forward) {
   std::shared_ptr<GatewaySession> session;
   db::SessionLease lease;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    auto found = sessions.find(delivery.recipient_uid());
+    auto found = sessions.find(forward.recipient_uid());
     if (found == sessions.end())
-      return gateway::DELIVERY_STATUS_OFFLINE;
+      return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
     session = found->second.session.lock();
     lease = found->second.lease;
   }
 
   if (!session)
-    return gateway::DELIVERY_STATUS_OFFLINE;
+    return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
 
   /*
     Message Core 查询在线 lease 后，把它当时看到的连接身份写入
-    DeliveryEnvelope。Gateway 在真正写 socket 前，要求本地当前 session 的
+    ClientForwardEnvelope。Gateway 在真正写 socket 前，要求本地当前 session 的
     connectionId 和 generation 都完全一致；不一致就返回 STALE_ROUTE，不投递。
     未来可以考虑投递，不然导致了一个用户的消息（如通知）无法及时收到，只因为它的连接身份变了。
     目前一般来说，对于可持久化消息是不会丢的，它存放在 Mysql 存储表中。
   */
-  if (lease.connectionId != delivery.expected_connection_id() ||
-      lease.generation != delivery.expected_connection_generation())
-    return gateway::DELIVERY_STATUS_STALE_ROUTE;
+  if (lease.connectionId != forward.expected_connection_id() ||
+      lease.generation != forward.expected_connection_generation())
+    return gateway::CLIENT_FORWARD_STATUS_STALE_ROUTE;
   TcpPacket packet;
-  const bool hasTransportSequence = ParseTcpPacket(delivery.packet(), packet) &&
+  const bool hasTransportSequence = ParseTcpPacket(forward.packet(), packet) &&
                                     packet.has_seq() && packet.seq() > 0;
   const bool queued =
       hasTransportSequence
-          ? session->SendReliable(delivery.packet(), delivery.protocol_id(),
+          ? session->SendReliable(forward.packet(), forward.protocol_id(),
                                   packet.seq())
-          : session->SendRaw(delivery.packet(), delivery.protocol_id());
+          : session->SendRaw(forward.packet(), forward.protocol_id());
   if (!queued)
-    return gateway::DELIVERY_STATUS_BACKPRESSURED;
-  return gateway::DELIVERY_STATUS_QUEUED;
+    return gateway::CLIENT_FORWARD_STATUS_BACKPRESSURED;
+  return gateway::CLIENT_FORWARD_STATUS_QUEUED;
 }
 
 const std::string &SessionRegistry::GatewayId() const {

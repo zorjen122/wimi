@@ -2,7 +2,6 @@
 
 #include "Const.h"
 #include "DbGlobal.h"
-#include "DeliveryService.h"
 #include "Logger.h"
 #include "Mysql.h"
 #include "Redis.h"
@@ -11,9 +10,6 @@
 #include <string>
 
 namespace wimi {
-
-MessageService::MessageService(DeliveryService &deliveryService)
-    : deliveryService(deliveryService) {}
 
 MessageService::AcceptedText MessageService::AcceptText(TcpPacket request) {
   AcceptedText result;
@@ -70,9 +66,9 @@ MessageService::AcceptedText MessageService::AcceptText(TcpPacket request) {
   request.set_session_key(accepted.conversationId);
   request.set_message_state(protocol::MESSAGE_STATE_ACCEPTED);
   request.set_send_date_time(sendDateTime);
-  result.delivery = std::move(request);
+  result.forwardPacket = std::move(request);
   result.recipientUid = to;
-  result.shouldDeliver = !accepted.duplicate;
+  result.shouldForward = !accepted.duplicate;
   return result;
 }
 
@@ -136,35 +132,32 @@ MessageService::AcceptedGroupText MessageService::AcceptGroupText(
   request.set_session_key(accepted.conversationId);
   request.set_message_state(protocol::MESSAGE_STATE_ACCEPTED);
   request.set_send_date_time(sendDateTime);
-  result.delivery = std::move(request);
+  result.forwardPacket = std::move(request);
   result.recipientUids = std::move(accepted.recipientUids);
-  result.shouldDeliver = !accepted.duplicate;
+  result.shouldForward = !accepted.duplicate;
   return result;
 }
 
-TcpPacket MessageService::Ack(uint32_t msgID, TcpPacket &request) {
-  TcpPacket rsp;
+MessageService::AckResult MessageService::Ack(TcpPacket &request) {
+  AckResult result;
+  auto &rsp = result.response;
   int64_t seq = request.seq();
   int64_t uid = request.uid();
   if (seq <= 0) {
     rsp.set_error(ErrorCodes::JsonParser);
-    return rsp;
+    return result;
   }
-  bool legacyReceipt =
-      !request.has_receipt_type() ||
-      request.receipt_type() == protocol::RECEIPT_TYPE_UNSPECIFIED;
-  auto receiptType =
-      legacyReceipt ? protocol::RECEIPT_TYPE_DELIVERED : request.receipt_type();
-  // 通知类 transport ACK 只结束重传，不参与消息生命周期状态。
-  if (receiptType == protocol::RECEIPT_TYPE_TRANSPORT) {
-    deliveryService.Acknowledge(uid, seq);
-    rsp.set_error(ErrorCodes::Success);
-    return rsp;
+  if (!request.has_receipt_type() ||
+      !request.has_conversation_id() || !request.has_conversation_seq() ||
+      request.conversation_id() <= 0 || request.conversation_seq() <= 0) {
+    rsp.set_error(ErrorCodes::JsonParser);
+    return result;
   }
+  const auto receiptType = request.receipt_type();
   if (receiptType != protocol::RECEIPT_TYPE_DELIVERED &&
       receiptType != protocol::RECEIPT_TYPE_READ) {
     rsp.set_error(ErrorCodes::JsonParser);
-    return rsp;
+    return result;
   }
   short status = receiptType == protocol::RECEIPT_TYPE_READ
                      ? db::Message::Status::READ
@@ -173,36 +166,37 @@ TcpPacket MessageService::Ack(uint32_t msgID, TcpPacket &request) {
                              ? getCurrentDateTime()
                              : std::string{};
 
-  // 新协议同时校验会话成员身份并原子推进成员游标；旧协议保留 receiver 校验。
-  const bool hasConversationCursor =
-      request.has_conversation_id() && request.has_conversation_seq();
-  int updated =
-      hasConversationCursor
-          ? db::MysqlDao::GetInstance()->acknowledgeConversationMessage(
-                seq, uid, request.conversation_id(), request.conversation_seq(),
-                status, readTime)
-          : db::MysqlDao::GetInstance()->updateMessageForReceiver(
-                seq, uid, status, readTime);
-  if (updated == 0 && legacyReceipt) {
-    deliveryService.Acknowledge(uid, seq);
-    rsp.set_error(ErrorCodes::Success);
-    return rsp;
-  }
-  if (updated <= 0) {
+  const auto acknowledged =
+      db::MysqlDao::GetInstance()->acknowledgeConversationMessage(
+          seq, uid, request.conversation_id(), request.conversation_seq(),
+          status, readTime);
+  if (acknowledged.updated <= 0) {
     LOG_WARN(wimi::businessLogger,
              "ACK所有权校验失败或消息不存在, seq: {}, principal: {}", seq, uid);
-    rsp.set_error(updated == -1 ? ErrorCodes::MysqlFailed
-                                : ErrorCodes::MessageOwnershipInvalid);
-    return rsp;
+    rsp.set_error(acknowledged.updated == -1
+                      ? ErrorCodes::MysqlFailed
+                      : ErrorCodes::MessageOwnershipInvalid);
+    return result;
   }
 
-  deliveryService.Acknowledge(uid, seq);
   rsp.set_error(ErrorCodes::Success);
   rsp.set_message_id(seq);
   rsp.set_message_state(receiptType == protocol::RECEIPT_TYPE_READ
                             ? protocol::MESSAGE_STATE_READ
                             : protocol::MESSAGE_STATE_DELIVERED);
-  return rsp;
+  if (receiptType == protocol::RECEIPT_TYPE_READ &&
+      acknowledged.directConversation && acknowledged.readStateChanged) {
+    result.senderUid = acknowledged.senderUid;
+    result.shouldForwardRead = result.senderUid > 0;
+    result.readReceipt.set_seq(seq);
+    result.readReceipt.set_message_id(seq);
+    result.readReceipt.set_from(uid);
+    result.readReceipt.set_to(result.senderUid);
+    result.readReceipt.set_conversation_id(request.conversation_id());
+    result.readReceipt.set_conversation_seq(request.conversation_seq());
+    result.readReceipt.set_message_state(protocol::MESSAGE_STATE_READ);
+  }
+  return result;
 }
 
 TcpPacket MessageService::SendFile(uint32_t msgID, TcpPacket &request) {

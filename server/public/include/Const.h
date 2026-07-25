@@ -53,6 +53,7 @@ class Defer {
 enum ErrorCodes {
   Success = 0,
   JsonParser = 1000,
+  ProtobufPacket,
   RPCFailed,
   VerificationExpired,
   VerificationCodeInvalid,
@@ -156,6 +157,9 @@ enum ServiceID {
   ID_GROUP_TEXT_SEND_REQ,  // 发送群组消息
   ID_GROUP_TEXT_SEND_RSP,
 
+  ID_TEXT_READ_RECEIPT_NOTIFY,  // 单聊文本已读通知
+  ID_TEXT_READ_RECEIPT_NOTIFY_RSP,
+
 };
 
 static std::unordered_map<int, std::string> errorCodesMap = {
@@ -258,7 +262,10 @@ static std::unordered_map<int, std::string> serviceIDMap = {
     {ID_GROUP_QUIT_REQ, "ID_GROUP_QUIT_REQ"},
     {ID_GROUP_QUIT_RSP, "ID_GROUP_QUIT_RSP"},
     {ID_GROUP_TEXT_SEND_REQ, "ID_GROUP_TEXT_SEND_REQ"},
-    {ID_GROUP_TEXT_SEND_RSP, "ID_GROUP_TEXT_SEND_RSP"}};
+    {ID_GROUP_TEXT_SEND_RSP, "ID_GROUP_TEXT_SEND_RSP"},
+    {ID_TEXT_READ_RECEIPT_NOTIFY, "ID_TEXT_READ_RECEIPT_NOTIFY"},
+    {ID_TEXT_READ_RECEIPT_NOTIFY_RSP,
+     "ID_TEXT_READ_RECEIPT_NOTIFY_RSP"}};
 
 inline std::string getServiceIdString(int id) {
   if (serviceIDMap.find(id) != serviceIDMap.end()) {

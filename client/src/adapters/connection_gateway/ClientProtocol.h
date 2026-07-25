@@ -49,6 +49,8 @@ enum ServiceId : quint32 {
   QuitGroupResponse = 1042,
   SendGroupTextRequest = 1043,
   SendGroupTextResponse = 1044,
+  TextReadReceiptNotification = 1045,
+  TextReadReceiptNotificationResponse = 1046,
 };
 
 enum ErrorCode : int {

@@ -69,6 +69,13 @@ struct ConversationSyncResult {
   std::vector<ConversationMessageRecord> messages;
 };
 
+struct ConversationAckResult {
+  int updated{-1};
+  int64_t senderUid{0};
+  bool directConversation{false};
+  bool readStateChanged{false};
+};
+
 struct SqlConnection {
   SqlConnection(mysqlx::Session *connection, int64_t lastTime)
       : session(connection), leaseTime(lastTime) {}
@@ -993,46 +1000,6 @@ class MysqlDao : public Singleton<MysqlDao>,
     });
   }
 
-  // 返回 1 表示幂等成功，0 表示消息不存在，-2 表示 receiver 不匹配。
-  // 状态按数值单调推进，重复 READ 不覆盖首次 readDateTime。
-  int updateMessageForReceiver(long messageId, long receiverId, short status,
-                               const std::string &readDateTime = "") {
-    return executeTemplate([&](std::unique_ptr<mysqlx::Session> &session)
-                               -> int {
-      auto ownerResult =
-          session->sql(R"(SELECT receiverId FROM messages WHERE messageId = ?)")
-              .bind(messageId)
-              .execute();
-      auto ownerRow = ownerResult.fetchOne();
-      if (!ownerRow)
-        return 0;
-      if (ownerRow[0].get<int64_t>() != receiverId)
-        return -2;
-
-      if (readDateTime.empty()) {
-        session
-            ->sql(
-                R"(UPDATE messages SET status = GREATEST(status, ?) WHERE messageId = ? AND receiverId = ?)")
-            .bind(status)
-            .bind(messageId)
-            .bind(receiverId)
-            .execute();
-        return 1;
-      }
-
-      session
-          ->sql(
-              R"(UPDATE messages SET readDateTime = CASE WHEN status < ? OR readDateTime IS NULL OR readDateTime = '' THEN ? ELSE readDateTime END, status = GREATEST(status, ?) WHERE messageId = ? AND receiverId = ?)")
-          .bind(status)
-          .bind(readDateTime)
-          .bind(status)
-          .bind(messageId)
-          .bind(receiverId)
-          .execute();
-      return 1;
-    });
-  }
-
   int advanceConversationCursor(long uid, long conversationId,
                                 long conversationSeq, bool read) {
     if (uid <= 0 || conversationId <= 0 || conversationSeq <= 0)
@@ -1054,21 +1021,21 @@ class MysqlDao : public Singleton<MysqlDao>,
     });
   }
 
-  int acknowledgeConversationMessage(long messageId, long uid,
-                                     long conversationId, long conversationSeq,
-                                     short status,
-                                     const std::string &readDateTime = "") {
+  ConversationAckResult acknowledgeConversationMessage(
+      long messageId, long uid, long conversationId, long conversationSeq,
+      short status, const std::string &readDateTime = "") {
     if (messageId <= 0 || uid <= 0 || conversationId <= 0 ||
         conversationSeq <= 0)
-      return 0;
+      return {.updated = 0};
     return executeTemplate([&](std::unique_ptr<mysqlx::Session> &session)
-                               -> int {
+                               -> ConversationAckResult {
+      ConversationAckResult acknowledged;
       session->startTransaction();
       try {
         auto owner =
             session
                 ->sql(
-                    R"(SELECT c.type, msg.receiverId FROM messages msg INNER JOIN conversations c ON c.conversationId = msg.conversationId INNER JOIN conversationMembers cm ON cm.conversationId = c.conversationId AND cm.uid = ? WHERE msg.messageId = ? AND msg.conversationId = ? AND msg.conversationSeq = ? FOR UPDATE)")
+                    R"(SELECT c.type, msg.receiverId, msg.senderId, msg.status FROM messages msg INNER JOIN conversations c ON c.conversationId = msg.conversationId INNER JOIN conversationMembers cm ON cm.conversationId = c.conversationId AND cm.uid = ? WHERE msg.messageId = ? AND msg.conversationId = ? AND msg.conversationSeq = ? FOR UPDATE)")
                 .bind(uid)
                 .bind(messageId)
                 .bind(conversationId)
@@ -1077,13 +1044,20 @@ class MysqlDao : public Singleton<MysqlDao>,
         auto ownerRow = owner.fetchOne();
         if (!ownerRow) {
           session->rollback();
-          return 0;
+          acknowledged.updated = 0;
+          return acknowledged;
         }
         const int conversationType = ownerRow[0].get<int>();
         if (conversationType == 1 && ownerRow[1].get<int64_t>() != uid) {
           session->rollback();
-          return -2;
+          acknowledged.updated = -2;
+          return acknowledged;
         }
+        acknowledged.senderUid = ownerRow[2].get<int64_t>();
+        acknowledged.directConversation = conversationType == 1;
+        acknowledged.readStateChanged =
+            status == Message::Status::READ &&
+            ownerRow[3].get<int>() < Message::Status::READ;
 
         if (conversationType == 1) {
           session
@@ -1105,7 +1079,8 @@ class MysqlDao : public Singleton<MysqlDao>,
             .bind(conversationId)
             .execute();
         session->commit();
-        return 1;
+        acknowledged.updated = 1;
+        return acknowledged;
       } catch (...) {
         try {
           session->rollback();

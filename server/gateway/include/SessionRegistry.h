@@ -23,7 +23,8 @@ class SessionRegistry {
   bool Refresh(int64_t uid, const db::SessionLease &lease);
   void Remove(int64_t uid, const std::shared_ptr<GatewaySession> &session,
               const db::SessionLease &lease);
-  gateway::DeliveryStatus Deliver(const gateway::DeliveryEnvelope &delivery);
+  gateway::ClientForwardStatus Forward(
+      const gateway::ClientForwardEnvelope &forward);
 
   const std::string &GatewayId() const;
   const std::string &InstanceId() const;

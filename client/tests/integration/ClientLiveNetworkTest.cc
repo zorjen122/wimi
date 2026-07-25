@@ -143,7 +143,6 @@ void ClientLiveNetworkTest::authSendAndSyncAcrossRealGateways() {
   QCOMPARE(pushed.clientMessageId(), clientMessageId);
   QCOMPARE(pushed.data(), text);
 
-  gatewayB.AcknowledgeTransport(pushed.messageId());
   gatewayB.AcknowledgeDelivered(pushed.messageId(), pushed.conversationId(),
                                 pushed.conversationSeq());
   gatewayB.AcknowledgeRead(pushed.messageId(), pushed.conversationId(),

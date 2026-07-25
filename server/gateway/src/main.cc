@@ -45,9 +45,9 @@ int main(int argc, char **argv) {
   wimi::connection::SessionRegistry registry(gatewayId, instanceId);
   wimi::connection::MessageLinkManager messageLinks(ioContext, businessPool,
                                                     gatewayId, instanceId);
-  messageLinks.SetDeliveryHandler(
-      [&registry](const wimi::gateway::DeliveryEnvelope &delivery) {
-        return registry.Deliver(delivery);
+  messageLinks.SetClientForwardHandler(
+      [&registry](const wimi::gateway::ClientForwardEnvelope &forward) {
+        return registry.Forward(forward);
       });
   messageLinks.Start();
 

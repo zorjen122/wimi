@@ -43,9 +43,8 @@ std::chrono::milliseconds ResolvePositiveMilliseconds(const char *name,
 }  // namespace
 
 Service::Service()
-    : friendService(deliveryService),
-      groupService(deliveryService),
-      messageService(deliveryService) {
+    : friendService(clientForwardService),
+      groupService(clientForwardService) {
   Init();
   requestTimeout =
       ResolvePositiveMilliseconds("WIMI_CHAT_REQUEST_TIMEOUT_MS", 3000);
@@ -89,7 +88,7 @@ void Service::RegisterHandle(uint32_t msgID, TaskType taskType,
 void Service::Init() {
   // 状态
   RegisterHandle(ID_ACK, TaskType::Heavy, [this](auto msgID, auto &request) {
-    return messageService.Ack(msgID, request);
+    return messageService.Ack(request).response;
   });
 
   // 消息与文件
@@ -162,8 +161,8 @@ bool Service::PostBackgroundTask(ThreadPool::Task task) {
   return threadPool->Post(std::move(task));
 }
 
-DeliveryService &Service::Deliveries() {
-  return deliveryService;
+ClientForwardService &Service::ClientForwards() {
+  return clientForwardService;
 }
 
 MessageService &Service::Messages() {
@@ -171,7 +170,7 @@ MessageService &Service::Messages() {
 }
 
 void Service::SetGatewayStreamService(rpc::GatewayStreamService *service) {
-  deliveryService.SetGatewayStreamService(service);
+  clientForwardService.SetGatewayStreamService(service);
 }
 
 TcpPacket Service::ExecuteGatewayCommand(uint32_t msgID, int64_t actorUid,

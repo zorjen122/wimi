@@ -4,11 +4,11 @@
 
 namespace wimi {
 
-class DeliveryService;
+class ClientForwardService;
 
 class FriendService {
  public:
-  explicit FriendService(DeliveryService &deliveryService);
+  explicit FriendService(ClientForwardService &clientForwardService);
 
   TcpPacket NotifyAddFriend(unsigned int msgID, TcpPacket &request);
   TcpPacket ReplyAddFriend(unsigned int msgID, TcpPacket &request);
@@ -20,7 +20,7 @@ class FriendService {
   int StoreNotifyAddFriend(TcpPacket &request);
   int StoreReplyAddFriend(TcpPacket &request);
 
-  DeliveryService &deliveryService;
+  ClientForwardService &clientForwardService;
 };
 
 }  // namespace wimi

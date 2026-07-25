@@ -6,38 +6,39 @@
 
 namespace wimi {
 
-class DeliveryService;
-
 class MessageService {
  public:
   struct AcceptedText {
     TcpPacket response;
-    TcpPacket delivery;
+    TcpPacket forwardPacket;
     int64_t recipientUid{0};
-    bool shouldDeliver{false};
+    bool shouldForward{false};
   };
 
   struct AcceptedGroupText {
     TcpPacket response;
-    TcpPacket delivery;
+    TcpPacket forwardPacket;
     std::vector<int64_t> recipientUids;
-    bool shouldDeliver{false};
+    bool shouldForward{false};
   };
 
-  explicit MessageService(DeliveryService &deliveryService);
+  struct AckResult {
+    TcpPacket response;
+    TcpPacket readReceipt;
+    int64_t senderUid{0};
+    bool shouldForwardRead{false};
+  };
 
   AcceptedText AcceptText(TcpPacket request);
   AcceptedGroupText AcceptGroupText(TcpPacket request);
 
-  TcpPacket Ack(uint32_t msgID, TcpPacket &request);
+  AckResult Ack(TcpPacket &request);
   TcpPacket SendText(uint32_t msgID, TcpPacket &request);
   TcpPacket SendFile(uint32_t msgID, TcpPacket &request);
   TcpPacket SendGroupText(uint32_t msgID, TcpPacket &request);
   TcpPacket PullSessionMessages(uint32_t msgID, TcpPacket &request);
   TcpPacket PullMessages(uint32_t msgID, TcpPacket &request);
 
- private:
-  DeliveryService &deliveryService;
 };
 
 }  // namespace wimi

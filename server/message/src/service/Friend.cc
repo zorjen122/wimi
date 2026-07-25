@@ -1,6 +1,6 @@
 #include "FriendService.h"
 #include "DbGlobal.h"
-#include "DeliveryService.h"
+#include "ClientForwardService.h"
 
 #include "Const.h"
 #include "Logger.h"
@@ -11,8 +11,8 @@
 #include <string>
 namespace wimi {
 
-FriendService::FriendService(DeliveryService &deliveryService)
-    : deliveryService(deliveryService) {}
+FriendService::FriendService(ClientForwardService &clientForwardService)
+    : clientForwardService(clientForwardService) {}
 
 int FriendService::StoreNotifyAddFriend(TcpPacket &request) {
   long from = request.uid();
@@ -48,8 +48,8 @@ TcpPacket FriendService::NotifyAddFriend(unsigned int msgID,
   TcpPacket senderRsp = request;
   senderRsp.clear_skip_storage();
   senderRsp.set_seq(db::RedisDao::GetInstance()->generateMsgId());
-  if (deliveryService.SendGateway(to, SerializeTcpPacket(senderRsp),
-                                  ID_NOTIFY_ADD_FRIEND_REQ)) {
+  if (clientForwardService.ForwardToGateway(
+          to, SerializeTcpPacket(senderRsp), ID_NOTIFY_ADD_FRIEND_REQ)) {
     rsp.set_error(ErrorCodes::Success);
     return rsp;
   }
@@ -92,8 +92,8 @@ TcpPacket FriendService::ReplyAddFriend(unsigned int msgID,
   senderRsp.set_accept(accept);
   senderRsp.set_reply_message(replyMessage);
   senderRsp.set_seq(db::RedisDao::GetInstance()->generateMsgId());
-  if (deliveryService.SendGateway(to, SerializeTcpPacket(senderRsp),
-                                  ID_REPLY_ADD_FRIEND_REQ)) {
+  if (clientForwardService.ForwardToGateway(
+          to, SerializeTcpPacket(senderRsp), ID_REPLY_ADD_FRIEND_REQ)) {
     rsp.set_error(ErrorCodes::Success);
     return rsp;
   }

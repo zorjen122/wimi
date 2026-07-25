@@ -11,6 +11,10 @@
 #include <string>
 #include <unordered_map>
 
+namespace wimi::gateway {
+class CommandResult;
+}
+
 namespace wimi::connection {
 
 class MessageLinkManager;
@@ -39,11 +43,15 @@ class GatewaySession : public std::enable_shared_from_this<GatewaySession> {
   boost::asio::awaitable<void> HandlePacket(uint32_t protocolId,
                                             std::string payload);
   boost::asio::awaitable<void> WriteLoop();
+  boost::asio::awaitable<bool> RefreshLeaseIfNeeded(int64_t actor);
   AuthResult Authenticate(TcpPacket request);
+  void HandleForwardResult(const gateway::CommandResult &result,
+                           bool expectResponse, int64_t actor,
+                           uint32_t protocolId, const std::string &requestId);
   void CloseInContext();
   void SendError(uint32_t requestId, int error, const std::string &message);
   void ArmReliableWrite(int64_t ackSeq);
-  void AcknowledgeTransport(int64_t ackSeq);
+  void AcknowledgeDelivery(int64_t ackSeq);
   std::string NextRequestId();
 
   boost::asio::ip::tcp::socket socket;

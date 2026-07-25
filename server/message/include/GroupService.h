@@ -7,11 +7,11 @@
 
 namespace wimi {
 
-class DeliveryService;
+class ClientForwardService;
 
 class GroupService {
  public:
-  explicit GroupService(DeliveryService &deliveryService);
+  explicit GroupService(ClientForwardService &clientForwardService);
 
   TcpPacket Create(unsigned int msgID, TcpPacket &request);
   TcpPacket NotifyJoin(unsigned int msgID, TcpPacket &request);
@@ -25,7 +25,7 @@ class GroupService {
   int NotifyMemberReply(int64_t gid, int64_t managerUid, int64_t requestorUid,
                         bool accept);
 
-  DeliveryService &deliveryService;
+  ClientForwardService &clientForwardService;
 };
 
 }  // namespace wimi

@@ -61,7 +61,6 @@ class ConnectionGatewayClient final : public QObject {
                         const QString &clientMessageId,
                         std::int64_t conversationId = 0);
 
-  void AcknowledgeTransport(std::int64_t messageId);
   void AcknowledgeDelivered(std::int64_t messageId, std::int64_t conversationId,
                             std::int64_t conversationSequence);
   void AcknowledgeRead(std::int64_t messageId, std::int64_t conversationId,
@@ -97,7 +96,7 @@ class ConnectionGatewayClient final : public QObject {
   void SendReceipt(std::int64_t messageId, int receiptType,
                    std::int64_t conversationId,
                    std::int64_t conversationSequence);
-  void SendPacket(quint32 serviceId, const wimi::protocol::Packet &packet);
+  void SendPacket(quint32 serviceId, wimi::protocol::Packet packet);
   void HandleFrame(const TcpFrame &frame);
   void HandleLoginResponse(const QByteArray &payload);
   void ScheduleReconnect();

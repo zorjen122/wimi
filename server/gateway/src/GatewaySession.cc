@@ -188,6 +188,16 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
     co_return;
   }
 
+  if (!request.has_request_id() || request.request_id().empty()) {
+    LOG_WARN(netLogger,
+             "Gateway rejected malformed packet, connection_id: {}, "
+             "protocol_id: {}, service: {}, payload_bytes: {}",
+             connectionId, protocolId, ServiceName(protocolId), payload.size());
+    SendError(protocolId, ErrorCodes::ProtobufPacket,
+              "invalid protobuf packet");
+    co_return;
+  }
+
   // 登录包由 Gateway 本地处理：校验短期 token、加载资料并发布 generation
   // lease。
   if (protocolId == ID_LOGIN_INIT_REQ) {
@@ -238,30 +248,13 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
     co_return;
   }
 
-  // 活跃连接每 20 秒至多刷新一次 lease；CAS 失败表示该 generation
-  // 已被新连接取代。
-  if (std::chrono::steady_clock::now() - lastLeaseRefresh >=
-      std::chrono::seconds(20)) {
-    const bool refreshed = co_await asio::co_spawn(
-        businessPool,
-        [this, actor, currentLease = lease]() -> asio::awaitable<bool> {
-          co_return registry.Refresh(actor, currentLease);
-        },
-        asio::use_awaitable);
-    if (!refreshed) {
-      LOG_WARN(businessLogger,
-               "Gateway lease refresh fenced stale connection, uid: {}, "
-               "connection_id: {}, generation: {}",
-               actor, connectionId, lease.generation);
-      CloseInContext();
-      co_return;
-    }
-    lastLeaseRefresh = std::chrono::steady_clock::now();
-    LOG_DEBUG(businessLogger,
-              "Gateway lease refreshed, uid: {}, connection_id: {}, "
-              "generation: {}",
-              actor, connectionId, lease.generation);
-  }
+  /*
+    活跃连接每 20 秒至多刷新一次 lease 租约，失败表示该连接已被新连接取代。
+    采用这种手法可以在处理假死连接的同时，可以拒绝旧连接再发请求，保证唯一性。
+    所以后续 gateway 与 client 没有双向心跳机制，只有单向，因为目前实现覆盖了这点。
+  */
+  if (!(co_await RefreshLeaseIfNeeded(actor)))
+    co_return;
 
   // PING 只维持客户端物理连接，Gateway 本地立即回复，不占用 Message 流。
   if (protocolId == ID_PING_REQ) {
@@ -286,26 +279,19 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
     co_return;
   }
 
-  // TRANSPORT ACK 只取消 Gateway 本地重传；DELIVERED/READ ACK 还需转发给
-  // Message Core 更新持久游标，因此不能在这里一并吞掉。
+  // DELIVERED/READ ACK 都会取消 Gateway 本地重传；没有会话游标的通知 ACK
+  // 到此结束，有会话游标的消息 ACK 再转发给 Message Core 更新状态。
   if (protocolId == ID_ACK) {
     if (request.has_seq() && request.seq() > 0) {
-      AcknowledgeTransport(request.seq());
+      AcknowledgeDelivery(request.seq());
       LOG_TRACE(netLogger,
-                "Gateway handled transport ACK, uid: {}, connection_id: {}, "
+                "Gateway handled delivery ACK, uid: {}, connection_id: {}, "
                 "seq: {}, receipt_type: {}",
                 actor, connectionId, request.seq(),
                 static_cast<int>(request.receipt_type()));
     }
-    if (request.receipt_type() == protocol::RECEIPT_TYPE_TRANSPORT) {
+    if (!request.has_conversation_id() || !request.has_conversation_seq())
       co_return;
-    }
-    LOG_DEBUG(businessLogger,
-              "Gateway forwarding business ACK, uid: {}, connection_id: {}, "
-              "receipt_type: {}, conversation_id: {}, conversation_seq: {}",
-              actor, connectionId, static_cast<int>(request.receipt_type()),
-              request.has_conversation_id() ? request.conversation_id() : 0,
-              request.has_conversation_seq() ? request.conversation_seq() : 0);
   }
 
   // 对所有需要进入 Message Core 的命令执行连接级固定窗口限流。
@@ -329,8 +315,6 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
   // 通用业务包统一封装 CommandEnvelope；request_id 负责跨流关联，连接
   // generation 负责在 Message 节点拒绝已经被新登录替代的旧连接命令。
   request.set_uid(actor);
-  if (!request.has_request_id() || request.request_id().empty())
-    request.set_request_id(NextRequestId());
 
   gateway::CommandEnvelope command;
   command.set_request_id(request.request_id());
@@ -359,42 +343,15 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
             ServiceName(protocolId), conversationId, timeout.count(),
             expectResponse);
   auto weak = weak_from_this();
-  if (!messageLinks.Forward(
-          std::move(command),
-          [weak, expectResponse, actor, protocolId,
-           requestId](const gateway::CommandResult &result) {
-            if (auto session = weak.lock()) {
-              if (result.error() == ErrorCodes::AuthenticationRequired) {
-                LOG_WARN(businessLogger,
-                         "Message node fenced Gateway command, request_id: {}, "
-                         "uid: {}, protocol_id: {}, service: {}",
-                         requestId, actor, protocolId, ServiceName(protocolId));
-                session->Close();
-                return;
-              }
-              if (!expectResponse) {
-                LOG_DEBUG(businessLogger,
-                          "Gateway command completed without client response, "
-                          "request_id: {}, uid: {}, protocol_id: {}, error: {}",
-                          requestId, actor, protocolId, result.error());
-                return;
-              }
-              LOG_DEBUG(businessLogger,
-                        "Gateway received command result, request_id: {}, uid: "
-                        "{}, protocol_id: {}, response_service_id: {}, error: "
-                        "{}, retryable: {}",
-                        requestId, actor, protocolId,
-                        result.response_service_id(), result.error(),
-                        result.retryable());
-              if (!session->SendRaw(result.packet(),
-                                    result.response_service_id()))
-                LOG_WARN(
-                    netLogger,
-                    "Gateway failed to queue command response, request_id: "
-                    "{}, uid: {}, response_service_id: {}",
-                    requestId, actor, result.response_service_id());
-            }
-          })) {
+  if (!messageLinks.Forward(std::move(command),
+                            [weak, expectResponse, actor, protocolId,
+                             requestId](const gateway::CommandResult &result) {
+                              if (auto session = weak.lock()) {
+                                session->HandleForwardResult(
+                                    result, expectResponse, actor, protocolId,
+                                    requestId);
+                              }
+                            })) {
     LOG_WARN(netLogger,
              "Gateway failed to forward command, request_id: {}, uid: {}, "
              "protocol_id: {}, service: {}, healthy_message_streams: {}",
@@ -404,6 +361,66 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
       SendError(protocolId, ErrorCodes::DependencyUnavailable,
                 "no healthy message stream");
   }
+}
+
+asio::awaitable<bool> GatewaySession::RefreshLeaseIfNeeded(int64_t actor) {
+  if (std::chrono::steady_clock::now() - lastLeaseRefresh <
+      std::chrono::seconds(20))
+    co_return true;
+
+  const bool refreshed = co_await asio::co_spawn(
+      businessPool,
+      [this, actor, currentLease = lease]() -> asio::awaitable<bool> {
+        co_return registry.Refresh(actor, currentLease);
+      },
+      asio::use_awaitable);
+  if (!refreshed) {
+    LOG_WARN(businessLogger,
+             "Gateway lease refresh fenced stale connection, uid: {}, "
+             "connection_id: {}, generation: {}",
+             actor, connectionId, lease.generation);
+    CloseInContext();
+    co_return false;
+  }
+
+  lastLeaseRefresh = std::chrono::steady_clock::now();
+  LOG_DEBUG(businessLogger,
+            "Gateway lease refreshed, uid: {}, connection_id: {}, "
+            "generation: {}",
+            actor, connectionId, lease.generation);
+  co_return true;
+}
+
+void GatewaySession::HandleForwardResult(const gateway::CommandResult &result,
+                                         bool expectResponse, int64_t actor,
+                                         uint32_t protocolId,
+                                         const std::string &requestId) {
+  if (result.error() == ErrorCodes::AuthenticationRequired) {
+    LOG_WARN(businessLogger,
+             "Message node fenced Gateway command, request_id: {}, uid: {}, "
+             "protocol_id: {}, service: {}",
+             requestId, actor, protocolId, ServiceName(protocolId));
+    Close();
+    return;
+  }
+  if (!expectResponse) {
+    LOG_DEBUG(businessLogger,
+              "Gateway command completed without client response, "
+              "request_id: {}, uid: {}, protocol_id: {}, error: {}",
+              requestId, actor, protocolId, result.error());
+    return;
+  }
+  LOG_DEBUG(businessLogger,
+            "Gateway received command result, request_id: {}, uid: {}, "
+            "protocol_id: {}, response_service_id: {}, error: {}, "
+            "retryable: {}",
+            requestId, actor, protocolId, result.response_service_id(),
+            result.error(), result.retryable());
+  if (!SendRaw(result.packet(), result.response_service_id()))
+    LOG_WARN(netLogger,
+             "Gateway failed to queue command response, request_id: {}, uid: "
+             "{}, response_service_id: {}",
+             requestId, actor, result.response_service_id());
 }
 
 asio::awaitable<void> GatewaySession::WriteLoop() {
@@ -519,9 +536,10 @@ void GatewaySession::ArmReliableWrite(int64_t ackSeq) {
     if (current == self->reliableWrites.end())
       return;
     if (current->second.attempts >= 3) {
-      LOG_WARN(netLogger,
-               "Gateway delivery transport ACK timed out, uid: {}, seq: {}",
-               self->userId.load(std::memory_order_acquire), ackSeq);
+      LOG_WARN(
+          netLogger,
+          "Gateway client-forward delivery ACK timed out, uid: {}, seq: {}",
+          self->userId.load(std::memory_order_acquire), ackSeq);
       self->reliableWrites.erase(current);
       return;
     }
@@ -534,7 +552,7 @@ void GatewaySession::ArmReliableWrite(int64_t ackSeq) {
   });
 }
 
-void GatewaySession::AcknowledgeTransport(int64_t ackSeq) {
+void GatewaySession::AcknowledgeDelivery(int64_t ackSeq) {
   auto found = reliableWrites.find(ackSeq);
   if (found == reliableWrites.end())
     return;

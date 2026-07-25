@@ -318,8 +318,6 @@ std::size_t MessageLinkManager::HealthyLinkCount() const {
 
 bool MessageLinkManager::Forward(gateway::CommandEnvelope command,
                                  CommandCallback callback) {
-  if (command.request_id().empty())
-    return false;
   const int64_t now = NowUnixMilliseconds();
   if (command.deadline_unix_ms() <= now)
     return false;
@@ -374,8 +372,8 @@ bool MessageLinkManager::Forward(gateway::CommandEnvelope command,
   return true;
 }
 
-void MessageLinkManager::SetDeliveryHandler(DeliveryHandler handler) {
-  deliveryHandler = std::move(handler);
+void MessageLinkManager::SetClientForwardHandler(ClientForwardHandler handler) {
+  clientForwardHandler = std::move(handler);
 }
 
 asio::awaitable<void> MessageLinkManager::TopologyLoop() {
@@ -628,25 +626,27 @@ void MessageLinkManager::OnFrame(const std::string &nodeId,
     return;
   }
 
-  // Delivery 先交给本地 SessionRegistry 做 generation 校验和物理推送，再沿原流
-  // 返回 DeliveryAck；业务消息已持久化，因此离线/背压不会回滚 ACCEPTED。
-  if (frame.has_delivery()) {
+  // ClientForward 先交给本地 SessionRegistry 做 generation 校验和物理推送，再沿
+  // 原流返回 ClientForwardAck；业务消息已持久化，因此离线/背压不会回滚 ACCEPTED。
+  if (frame.has_client_forward()) {
     LOG_DEBUG(businessLogger,
-              "Gateway handling Message delivery, node: {}, delivery_id: {}, "
+              "Gateway handling Message client forward, node: {}, forward_id: {}, "
               "recipient_uid: {}, message_id: {}, conversation_id: {}, "
               "conversation_seq: {}",
-              nodeId, frame.delivery().delivery_id(),
-              frame.delivery().recipient_uid(), frame.delivery().message_id(),
-              frame.delivery().conversation_id(),
-              frame.delivery().conversation_seq());
-    gateway::DeliveryStatus status = gateway::DELIVERY_STATUS_OFFLINE;
-    if (deliveryHandler) {
-      status = deliveryHandler(frame.delivery());
+              nodeId, frame.client_forward().forward_id(),
+              frame.client_forward().recipient_uid(),
+              frame.client_forward().message_id(),
+              frame.client_forward().conversation_id(),
+              frame.client_forward().conversation_seq());
+    gateway::ClientForwardStatus status =
+        gateway::CLIENT_FORWARD_STATUS_OFFLINE;
+    if (clientForwardHandler) {
+      status = clientForwardHandler(frame.client_forward());
     } else {
       LOG_ERROR(businessLogger,
-                "Gateway delivery handler is not installed, node: {}, "
-                "delivery_id: {}",
-                nodeId, frame.delivery().delivery_id());
+                "Gateway client-forward handler is not installed, node: {}, "
+                "forward_id: {}",
+                nodeId, frame.client_forward().forward_id());
     }
     std::shared_ptr<MessageLink> link;
     {
@@ -657,29 +657,29 @@ void MessageLinkManager::OnFrame(const std::string &nodeId,
     }
     if (link) {
       gateway::GatewayToMessageFrame ackFrame;
-      auto *ack = ackFrame.mutable_delivery_ack();
-      ack->set_delivery_id(frame.delivery().delivery_id());
+      auto *ack = ackFrame.mutable_client_forward_ack();
+      ack->set_forward_id(frame.client_forward().forward_id());
       ack->set_status(status);
       ack->set_gateway_id(gatewayId);
       ack->set_instance_id(instanceId);
       if (!link->Enqueue(std::move(ackFrame))) {
         LOG_WARN(netLogger,
-                 "Gateway failed to enqueue delivery ACK, node: {}, "
-                 "delivery_id: {}, status: {}",
-                 nodeId, frame.delivery().delivery_id(),
+                 "Gateway failed to enqueue client-forward ACK, node: {}, "
+                 "forward_id: {}, status: {}",
+                 nodeId, frame.client_forward().forward_id(),
                  static_cast<int>(status));
       } else {
         LOG_DEBUG(businessLogger,
-                  "Gateway enqueued delivery ACK, node: {}, delivery_id: {}, "
+                  "Gateway enqueued client-forward ACK, node: {}, forward_id: {}, "
                   "status: {}",
-                  nodeId, frame.delivery().delivery_id(),
+                  nodeId, frame.client_forward().forward_id(),
                   static_cast<int>(status));
       }
     } else {
       LOG_WARN(netLogger,
-               "Gateway cannot return delivery ACK because link is absent, "
-               "node: {}, delivery_id: {}, status: {}",
-               nodeId, frame.delivery().delivery_id(),
+               "Gateway cannot return client-forward ACK because link is absent, "
+               "node: {}, forward_id: {}, status: {}",
+               nodeId, frame.client_forward().forward_id(),
                static_cast<int>(status));
     }
     return;

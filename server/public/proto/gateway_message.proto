@@ -40,9 +40,9 @@ message CommandResult {
   bytes packet = 5;               // 序列化后的响应 protocol.Packet
 }
 
-// Message Core 发给目标 Gateway 的已持久化消息/通知。
-message DeliveryEnvelope {
-  string delivery_id = 1;             // 本次投递尝试的唯一 ID
+// Message Core 请求目标 Gateway 转发给客户端的消息/通知。
+message ClientForwardEnvelope {
+  string forward_id = 1;              // 本次转发尝试的唯一 ID
   int64 recipient_uid = 2;             // 目标用户 ID
   string expected_connection_id = 3;   // 查询 lease 时看到的连接 UUID
   uint64 expected_connection_generation = 4; // 查询 lease 时看到的连接代次
@@ -53,20 +53,20 @@ message DeliveryEnvelope {
   bytes packet = 9;                     // 序列化后的推送 protocol.Packet
 }
 
-enum DeliveryStatus {
-  DELIVERY_STATUS_UNSPECIFIED = 0;  // 未指定投递结果
-  DELIVERY_STATUS_QUEUED = 1;       // 已进入客户端发送队列
-  DELIVERY_STATUS_OFFLINE = 2;      // 用户当前不在线
-  DELIVERY_STATUS_STALE_ROUTE = 3;  // connection/generation 已过期
-  DELIVERY_STATUS_BACKPRESSURED = 4; // 客户端发送队列已背压
+enum ClientForwardStatus {
+  CLIENT_FORWARD_STATUS_UNSPECIFIED = 0;  // 未指定转发结果
+  CLIENT_FORWARD_STATUS_QUEUED = 1;       // 已进入客户端发送队列
+  CLIENT_FORWARD_STATUS_OFFLINE = 2;      // 用户当前不在线
+  CLIENT_FORWARD_STATUS_STALE_ROUTE = 3;  // connection/generation 已过期
+  CLIENT_FORWARD_STATUS_BACKPRESSURED = 4; // 客户端发送队列已背压
 }
 
-// Gateway 对 DeliveryEnvelope 的接收/排队结果。
-message DeliveryAck {
-  string delivery_id = 1;     // 对应 DeliveryEnvelope.delivery_id
-  DeliveryStatus status = 2;  // Gateway 本地投递结果
-  string gateway_id = 3;      // 返回 ACK 的 Gateway 节点 ID
-  string instance_id = 4;     // 返回 ACK 的 Gateway 进程实例 UUID
+// Gateway 对 ClientForwardEnvelope 的接收/排队结果。
+message ClientForwardAck {
+  string forward_id = 1;            // 对应 ClientForwardEnvelope.forward_id
+  ClientForwardStatus status = 2;   // Gateway 本地转发结果
+  string gateway_id = 3;            // 返回 ACK 的 Gateway 节点 ID
+  string instance_id = 4;           // 返回 ACK 的 Gateway 进程实例 UUID
 }
 
 // Gateway 定期发送的流级心跳。
@@ -92,7 +92,7 @@ message GatewayToMessageFrame {
   oneof payload {
     RegisterGateway register_gateway = 1; // 建流注册
     CommandEnvelope command = 2;          // 客户端业务命令
-    DeliveryAck delivery_ack = 3;         // 下行投递结果
+    ClientForwardAck client_forward_ack = 3; // 下行转发结果
     StreamHeartbeat heartbeat = 4;         // 流级心跳
   }
 }
@@ -102,7 +102,7 @@ message MessageToGatewayFrame {
   oneof payload {
     RegisterResult register_result = 1;       // 注册校验结果
     CommandResult command_result = 2;         // 业务命令结果
-    DeliveryEnvelope delivery = 3;            // 面向客户端的下行投递
+    ClientForwardEnvelope client_forward = 3; // 面向客户端的转发请求
     StreamHeartbeatAck heartbeat_ack = 4;     // 流级心跳响应
     DrainNotice drain_notice = 5;              // Message 排空通知
   }

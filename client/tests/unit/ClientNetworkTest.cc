@@ -225,6 +225,7 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
         if (frame.serviceId == protocol::LoginRequest) {
           QCOMPARE(packet.uid(), 42);
           QCOMPARE(packet.authToken(), QStringLiteral("token-42"));
+          QVERIFY(!packet.requestId().isEmpty());
           wimi::protocol::Packet response;
           response.setError(protocol::Success);
           response.setUid(42);
@@ -233,6 +234,7 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
           continue;
         }
         if (frame.serviceId == protocol::QuitRequest) {
+          QVERIFY(!packet.requestId().isEmpty());
           wimi::protocol::Packet response;
           response.setError(protocol::Success);
           serverSocket->write(TcpFrameCodec::Encode(protocol::QuitResponse,
@@ -240,6 +242,7 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
           continue;
         }
         if (frame.serviceId == protocol::Ack) {
+          QVERIFY(!packet.requestId().isEmpty());
           receipts.push_back(packet);
           continue;
         }
@@ -343,20 +346,15 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
       TcpFrameCodec::Encode(protocol::SendTextRequest, PacketPayload(push)));
   QTRY_COMPARE(pushes.count(), 1);
 
-  gateway.AcknowledgeTransport(7002);
   gateway.AcknowledgeDelivered(7002, 8001, 10);
   gateway.AcknowledgeRead(7002, 8001, 10);
-  QTRY_COMPARE(receipts.size(), 3);
+  QTRY_COMPARE(receipts.size(), 2);
   QCOMPARE(
       receipts[0].receiptType(),
-      wimi::protocol::ReceiptTypeGadget::ReceiptType::RECEIPT_TYPE_TRANSPORT);
-  QVERIFY(!receipts[0].hasConversationId());
-  QCOMPARE(
-      receipts[1].receiptType(),
       wimi::protocol::ReceiptTypeGadget::ReceiptType::RECEIPT_TYPE_DELIVERED);
-  QCOMPARE(receipts[1].conversationId(), 8001);
-  QCOMPARE(receipts[1].conversationSeq(), 10);
-  QCOMPARE(receipts[2].receiptType(),
+  QCOMPARE(receipts[0].conversationId(), 8001);
+  QCOMPARE(receipts[0].conversationSeq(), 10);
+  QCOMPARE(receipts[1].receiptType(),
            wimi::protocol::ReceiptTypeGadget::ReceiptType::RECEIPT_TYPE_READ);
 
   gateway.Close();

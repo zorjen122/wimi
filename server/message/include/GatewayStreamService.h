@@ -31,9 +31,10 @@ class GatewayStreamService final
                 GatewayStreamReactor *reactor);
   void Unregister(const std::string &gatewayId, const std::string &instanceId,
                   GatewayStreamReactor *reactor);
-  bool Deliver(const db::SessionLease &lease,
-               gateway::DeliveryEnvelope envelope);
-  bool DeliverToUser(int64_t recipientUid, gateway::DeliveryEnvelope envelope);
+  bool Forward(const db::SessionLease &lease,
+               gateway::ClientForwardEnvelope envelope);
+  bool ForwardToUser(int64_t recipientUid,
+                     gateway::ClientForwardEnvelope envelope);
   bool Reply(const std::string &gatewayId, const std::string &instanceId,
              GatewayStreamReactor *reactor,
              gateway::MessageToGatewayFrame frame);

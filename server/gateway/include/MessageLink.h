@@ -24,8 +24,8 @@ class MessageLinkManager {
  public:
   using CommandCallback =
       std::function<void(const gateway::CommandResult &result)>;
-  using DeliveryHandler = std::function<gateway::DeliveryStatus(
-      const gateway::DeliveryEnvelope &delivery)>;
+  using ClientForwardHandler = std::function<gateway::ClientForwardStatus(
+      const gateway::ClientForwardEnvelope &forward)>;
 
   MessageLinkManager(boost::asio::io_context &ioContext,
                      boost::asio::thread_pool &controlPool,
@@ -37,7 +37,7 @@ class MessageLinkManager {
   bool Ready() const;
   std::size_t HealthyLinkCount() const;
   bool Forward(gateway::CommandEnvelope command, CommandCallback callback);
-  void SetDeliveryHandler(DeliveryHandler handler);
+  void SetClientForwardHandler(ClientForwardHandler handler);
 
  private:
   friend class MessageLink;
@@ -91,7 +91,7 @@ class MessageLinkManager {
 
   std::mutex pendingMutex;
   std::unordered_map<std::string, PendingCommand> pending;
-  DeliveryHandler deliveryHandler;
+  ClientForwardHandler clientForwardHandler;
 };
 
 }  // namespace wimi::connection

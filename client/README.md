@@ -21,7 +21,7 @@ Connection Gateway 真实网络模式。网络代码已按当前服务端源码�
   运行库由 Qt kit 随包部署。
 - 登录、验证码、注册和找回密码 UI 已接入 Auth Gate；注册或重置成功后返回登录。
 - 好友/申请拉取和处理、单聊/群聊文本、增量消息同步、群创建/入群审批、文件上传
-  请求，以及 TRANSPORT、DELIVERED、READ 三类 ACK。
+  请求，以及 DELIVERED、READ 两类 ACK。
 - 文本 outbox 使用不变的逻辑幂等 ID 重试；持久 `ACCEPTED` 和入站推送落库后 ACK
   已接入现有 SQLite repository。
 - Linux freedesktop Notifications adapter、设置页通知自检、标准 `.desktop` 入口
@@ -151,7 +151,7 @@ ctest --test-dir build/client-clang -R '^client-live-network$' \
 ```
 
 该测试覆盖真实 Gate 登录、Gateway 鉴权、好友拉取、文本持久接受、接收端推送、
-TRANSPORT/DELIVERED/READ 回执，以及按 `conversation_seq` 增量同步。测试账号必须已是
+DELIVERED/READ 回执，以及按 `conversation_seq` 增量同步。测试账号必须已是
 好友；未设置上述环境变量时，该测试会跳过而不是访问默认地址。
 
 ## Linux 桌面集成

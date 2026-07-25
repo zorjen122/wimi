@@ -5,10 +5,8 @@ nodes and test clients.
 
 Naming follows the owning node or role:
 
-- `message-hunan-im.yaml`: primary Message node on gRPC `50055`; legacy TCP
-  rollback port is `8190` and disabled by default.
-- `message-beijing-im.yaml`: secondary Message node on gRPC `50056`; legacy TCP
-  rollback port is `8191` and disabled by default.
+- `message-hunan-im.yaml`: primary Message node on gRPC `50055`.
+- `message-beijing-im.yaml`: secondary Message node on gRPC `50056`.
 - `gateway-hunan.yaml`: primary Connection Gateway on `8090`.
 - `gateway-beijing.yaml`: secondary Connection Gateway on `8091`.
 - `gate.yaml`: Auth/API Gate HTTP、验证码和 SMTP 配置。

@@ -10,8 +10,6 @@ find_package(Threads REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(gRPC REQUIRED)
 
-set(protobuf_MODULE_COMPATIBLE TRUE)
-
 file(GLOB SOURCE src/**/*.cc)
 add_library(imState ${SOURCE})
 add_executable(state src/main.cc)

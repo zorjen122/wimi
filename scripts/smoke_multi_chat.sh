@@ -4,7 +4,7 @@ set -euo pipefail
 # 作用：
 #   验证两个 message 节点同时运行时的跨节点核心流程。
 #   用户 A 登录 gateway-1，用户 B 登录 gateway-2，脚本检查 Redis 会话路由、
-#   跨节点文本 ACCEPTED/投递/ACK 落库、跨节点好友申请/回复、好友拉取和消息拉取。
+#   跨节点文本 ACCEPTED/投递/ACK 落库、跨节点好友申请/回复和好友拉取。
 # 前置条件：
 #   使用 server/conf/state-multi.yaml 和两个 message config 启动服务。
 #   典型启动方式见 --help 输出。
@@ -30,7 +30,6 @@ Verifies the currently supported multi-message-node path:
   - cross-node text returns ACCEPTED with a message_id
   - delivery reaches the receiver and is ACKed as DELIVERED in MySQL
   - cross-node friend apply/reply succeeds and can be pulled
-  - session and user message pulls can see the delivered text
 EOF
   exit 0
 fi
@@ -193,12 +192,13 @@ GATE_URL = os.environ["GATE_URL"]
 
 ID_PULL_FRIEND_LIST_REQ = 1001
 ID_PULL_FRIEND_APPLY_LIST_REQ = 1003
-ID_PULL_SESSION_MESSAGE_LIST_REQ = 1005
-ID_PULL_MESSAGE_LIST_REQ = 1007
 ID_NOTIFY_ADD_FRIEND_REQ = 1021
 ID_REPLY_ADD_FRIEND_REQ = 1023
 ID_TEXT_SEND_REQ = 1027
+ID_TEXT_READ_RECEIPT_NOTIFY = 1045
 
+NOTIFY_MESSAGE_READ = 2 
+MESSAGE_READ = 3
 
 def redis_session_lease(uid):
     output = subprocess.check_output(
@@ -292,19 +292,19 @@ try:
     )
     print("cross-node friend pull ok")
 
-    client_seq = int(time.time_ns() % 900000000000)
+    client_message_id = f"multi_text_{time.time_ns()}"
     text_rsp = a.request(
         ID_TEXT_SEND_REQ,
         {
             "from": UID_A,
             "to": UID_B,
-            "seq": client_seq,
-            "sessionKey": 0,
+            "clientMessageId": client_message_id,
             "data": TEXT_PAYLOAD,
         },
     )
     require(text_rsp.get("error") == 0, f"cross-node text response failed: {text_rsp}")
-    require(text_rsp.get("seq") == client_seq, f"cross-node client seq changed: {text_rsp}")
+    require(text_rsp.get("clientMessageId") == client_message_id,
+            f"cross-node client message id changed: {text_rsp}")
     require(text_rsp.get("messageState") == 1, f"cross-node text was not accepted: {text_rsp}")
     require(text_rsp.get("messageId", 0) > 0, f"cross-node message id missing: {text_rsp}")
 
@@ -317,18 +317,30 @@ try:
     server_seq = int(text_push["seq"])
     require(text_rsp["messageId"] == server_seq,
             f"response/push message id mismatch: {text_rsp}, {text_push}")
-    b.ack(server_seq)
+    b.ack(server_seq, conversation_id=text_push["conversationId"],
+          conversation_seq=text_push["conversationSeq"])
+
+    # read notify sender when the recvier look the message 
+    b.ack(server_seq, receipt_type=NOTIFY_MESSAGE_READ, 
+          conversation_id=text_push["conversationId"],
+          conversation_seq=text_push["conversationSeq"])
+    read_notify = a.expect_async(
+      ID_TEXT_READ_RECEIPT_NOTIFY,
+      lambda payload: payload.get("conversationId") == text_push["conversationId"]
+      and payload.get("conversationSeq") == text_push["conversationSeq"]
+      and payload.get("messageState") == MESSAGE_READ    # state 3 = MESSAGE_READ
+    )
+
     print("cross-node text push ok")
 
     if os.environ.get("WIMI_TEST_RPC_DELAY") == "1":
-        delayed_client_seq = client_seq + 1
         delayed_body = {
             "from": UID_A,
             "to": UID_B,
-            "seq": delayed_client_seq,
-            "sessionKey": 0,
+            "clientMessageId": f"multi_delay_{time.time_ns()}",
             "data": "rpc_delay_after_accept",
             "requestTimeoutMs": 100,
+            "requestId": f"multi_delay_request_{time.time_ns()}",
         }
         delayed_first = a.request(ID_TEXT_SEND_REQ, delayed_body)
         require(delayed_first.get("error", 0) != 0 and
@@ -345,29 +357,12 @@ try:
         require(delayed_retry.get("error", 0) != 0 and
                 delayed_retry.get("retryable") is False,
                 f"delayed RPC retry was not rejected as duplicate: {delayed_retry}")
-        b.ack(delayed_server_seq)
+        b.ack(delayed_server_seq,
+              conversation_id=delayed_push["conversationId"],
+              conversation_seq=delayed_push["conversationSeq"])
         print("RPC deadline duplicate suppression ok")
 
-    session_messages = b.request(
-        ID_PULL_SESSION_MESSAGE_LIST_REQ,
-        {"from": UID_A, "to": UID_B, "lastMsgId": 0, "limit": 20},
-    )
-    require(session_messages.get("error") == 0, f"pull session messages failed: {session_messages}")
-    require(
-        any(item.get("content") == TEXT_PAYLOAD for item in session_messages.get("messageList", [])),
-        f"session messages missing {TEXT_PAYLOAD}: {session_messages}",
-    )
-
-    user_messages = b.request(
-        ID_PULL_MESSAGE_LIST_REQ,
-        {"uid": UID_B, "lastMsgId": 0, "limit": 20},
-    )
-    require(user_messages.get("error") == 0, f"pull user messages failed: {user_messages}")
-    require(
-        any(item.get("content") == TEXT_PAYLOAD for item in user_messages.get("messageList", [])),
-        f"user messages missing {TEXT_PAYLOAD}: {user_messages}",
-    )
-    print("cross-node message pull ok")
+    print("cross-node message delivery ok")
 finally:
     try:
         a.quit(wait_response=True)
@@ -383,7 +378,7 @@ server_seq="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["s
 delayed_server_seq="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["delayed_server_seq"])' "$result_file")"
 
 for _ in {1..10}; do
-  text_count="$(mysql_scalar "SELECT COUNT(*) FROM messages WHERE messageId = $server_seq AND senderId = $uid_a AND receiverId = $uid_b AND CAST(sessionKey AS UNSIGNED) = conversationId AND content = '$text_payload' AND status = 2 AND COALESCE(readDateTime, '') = '';")"
+  text_count="$(mysql_scalar "SELECT COUNT(*) FROM messages WHERE messageId = $server_seq AND senderId = $uid_a AND receiverId = $uid_b AND CAST(sessionKey AS UNSIGNED) = conversationId AND content = '$text_payload' AND status = MESSAGE_READ AND COALESCE(readDateTime, '') = '';")"
   if [[ "$text_count" == "1" ]]; then
     echo "cross-node text mysql DELIVERED ack ok"
     break

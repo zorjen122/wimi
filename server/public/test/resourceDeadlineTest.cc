@@ -4,7 +4,7 @@
 #include "RequestContext.h"
 #include "RpcPool.h"
 #include "ThreadPool.h"
-#include "im.grpc.pb.h"
+#include "state.grpc.pb.h"
 
 #include <atomic>
 #include <chrono>
@@ -86,7 +86,7 @@ bool TestRedisPoolDeadline() {
 }
 
 bool TestRpcPoolDeadline() {
-  RpcPool<im::ImService> pool(1, "127.0.0.1", "50055");
+  RpcPool<state::StateService> pool(1, "127.0.0.1", "50055");
   auto held = pool.getConnectionUntil(wimi::RequestContext::Clock::now() + 1s);
   if (!Require(held != nullptr, "unable to acquire RPC test connection")) {
     return false;

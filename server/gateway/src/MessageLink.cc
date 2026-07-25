@@ -44,7 +44,6 @@ bool CanRetryOnAnotherMessageNode(uint32_t serviceId) {
     case ID_PULL_FRIEND_LIST_REQ:
     case ID_PULL_FRIEND_APPLY_LIST_REQ:
     case ID_PULL_SESSION_MESSAGE_LIST_REQ:
-    case ID_PULL_MESSAGE_LIST_REQ:
     case ID_ACK:
       return true;
     default:

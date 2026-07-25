@@ -65,14 +65,12 @@ message GroupMember {
 // 客户端 TCP/TLV 的通用 Protobuf 载荷；字段按具体 service_id 组合使用。
 message Packet {
   optional int64 uid = 1;                   // 用户 ID
-  optional int64 seq = 2;                   // 客户端包序号/传输 ACK 序号
+  optional int64 seq = 2;                   // 消息/通知 ACK 序号
   optional int64 from = 3;                  // 发送者用户 ID
   optional int64 to = 4;                    // 接收者用户 ID
   optional bytes data = 5;                  // 文本或二进制业务数据
-  optional int64 session_key = 6;           // 兼容旧协议的会话键
   optional int32 error = 7;                 // 统一业务错误码
   optional string message = 8;              // 面向客户端的错误/提示文本
-  optional string status = 9;               // 兼容旧接口的状态文本
   optional bool accept = 10;                // 是否接受申请或操作
   optional string request_message = 11;     // 申请附言
   optional string reply_message = 12;       // 回复附言
@@ -85,10 +83,8 @@ message Packet {
   optional string file_name = 19;           // 文件名
   optional string file_type = 20;           // 文件类型文本
   optional int32 type = 21;                 // 消息/业务类型
-  optional int64 last_msg_id = 22;          // 旧消息拉取游标
   optional int32 limit = 23;                // 单次拉取数量上限
   optional int64 gid = 24;                  // 群组业务 ID
-  optional int64 group_id = 25;             // 群组 ID 兼容字段
   optional string group_name = 26;          // 群组名称
   optional int64 manager_uid = 27;          // 群管理员用户 ID
   optional int64 requestor_uid = 28;        // 群申请人用户 ID
@@ -101,7 +97,6 @@ message Packet {
   optional string join_time = 35;           // 成员加群时间
   optional int32 role = 36;                 // 群成员角色
   optional int32 speech = 37;               // 群成员禁言/发言状态
-  optional bool skip_storage = 38;           // 是否跳过旧路径的消息落库
   optional string auth_token = 39;           // Gate 签发的短期连接凭证
   optional int64 message_id = 40;            // 服务端持久消息 ID
   optional MessageState message_state = 41;  // 消息生命周期状态

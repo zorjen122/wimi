@@ -11,8 +11,6 @@ find_package(Protobuf REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem)
 find_package(gRPC REQUIRED)
 
-set(protobuf_MODULE_COMPATIBLE TRUE)
-
 file(GLOB SOURCE src/**/*.cc)
 add_library(imMessage ${SOURCE})
 add_executable(message src/main.cc)

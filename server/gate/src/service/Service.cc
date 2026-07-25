@@ -36,19 +36,6 @@ Service::Service() {
                 return true;
               });
 
-  OnGetHandle("/test-net",
-              [this](HttpSession::ResponsePtr response,
-                     Json::Value &requestData) -> bool {
-                LOG_DEBUG(businessLogger, "[test_net handle called]");
-                auto ret = rpc::StateClient::GetInstance()->TestNetworkPing();
-                if (ret.empty()) {
-                  responseWrite(response, "[Network is not reachable]");
-                } else {
-                  responseWrite(response, "[TEST SUCCESS!]");
-                }
-                return true;
-              });
-
   OnPostHandle("/post-verifycode",
                std::bind(&Service::requestVerificationCode, this, _1, _2));
   OnPostHandle("/post-signUp", std::bind(&Service::signUp, this, _1, _2));

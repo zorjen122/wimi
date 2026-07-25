@@ -25,9 +25,7 @@ QString NewRequestId() {
 }  // namespace
 
 ConnectionGatewayClient::ConnectionGatewayClient(QObject *parent)
-    : QObject(parent),
-      next_legacy_sequence_(
-          std::max<qint64>(1, QDateTime::currentMSecsSinceEpoch())) {
+    : QObject(parent) {
   qRegisterMetaType<State>();
   heartbeat_timer_.setInterval(kHeartbeatIntervalMilliseconds);
   reconnect_timer_.setSingleShot(true);
@@ -149,14 +147,6 @@ QString ConnectionGatewayClient::PullConversationMessages(
   return QueueRequest(protocol::PullSessionMessagesRequest, std::move(packet));
 }
 
-QString ConnectionGatewayClient::PullAllMessages(std::int64_t lastMessageId,
-                                                 int limit) {
-  wimi::protocol::Packet packet;
-  packet.setLastMsgId(std::max<std::int64_t>(0, lastMessageId));
-  packet.setLimit(std::clamp(limit, 1, 200));
-  return QueueRequest(protocol::PullMessagesRequest, std::move(packet));
-}
-
 QString ConnectionGatewayClient::SendFriendRequest(std::int64_t recipientUid,
                                                    const QString &message) {
   wimi::protocol::Packet packet;
@@ -180,13 +170,11 @@ QString ConnectionGatewayClient::SendText(std::int64_t recipientUid,
                                           const QString &clientMessageId,
                                           std::int64_t conversationId) {
   wimi::protocol::Packet packet;
-  packet.setSeq(NextLegacySequence());
   packet.setTo(recipientUid);
   packet.setData(utf8Text);
   packet.setClientMessageId(clientMessageId);
   if (conversationId > 0) {
     packet.setConversationId(conversationId);
-    packet.setSessionKey(conversationId);
   }
   return QueueRequest(protocol::SendTextRequest, std::move(packet));
 }
@@ -232,13 +220,11 @@ QString ConnectionGatewayClient::SendGroupText(std::int64_t groupId,
                                                const QString &clientMessageId,
                                                std::int64_t conversationId) {
   wimi::protocol::Packet packet;
-  packet.setSeq(NextLegacySequence());
   packet.setGid(groupId);
   packet.setData(utf8Text);
   packet.setClientMessageId(clientMessageId);
   if (conversationId > 0) {
     packet.setConversationId(conversationId);
-    packet.setSessionKey(conversationId);
   }
   return QueueRequest(protocol::SendGroupTextRequest, std::move(packet));
 }
@@ -490,10 +476,6 @@ void ConnectionGatewayClient::SetState(State state) {
   }
   state_ = state;
   emit StateChanged(state_);
-}
-
-std::int64_t ConnectionGatewayClient::NextLegacySequence() {
-  return next_legacy_sequence_++;
 }
 
 }  // namespace wimi::client

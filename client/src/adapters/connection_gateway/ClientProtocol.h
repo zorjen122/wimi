@@ -11,8 +11,6 @@ enum ServiceId : quint32 {
   PullFriendApplyListResponse = 1004,
   PullSessionMessagesRequest = 1005,
   PullSessionMessagesResponse = 1006,
-  PullMessagesRequest = 1007,
-  PullMessagesResponse = 1008,
   PullGroupMembersRequest = 1009,
   PullGroupMembersResponse = 1010,
   PingRequest = 1011,

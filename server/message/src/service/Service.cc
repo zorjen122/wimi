@@ -124,11 +124,6 @@ void Service::Init() {
                  [this](auto msgID, auto &request) {
                    return messageService.PullSessionMessages(msgID, request);
                  });
-  RegisterHandle(ID_PULL_MESSAGE_LIST_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return messageService.PullMessages(msgID, request);
-                 });
-
   // 群聊
   RegisterHandle(ID_GROUP_CREATE_REQ, TaskType::Heavy,
                  [this](auto msgID, auto &request) {

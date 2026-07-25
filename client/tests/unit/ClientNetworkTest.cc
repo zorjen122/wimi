@@ -284,7 +284,6 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
   gateway.PullFriendList();
   gateway.PullFriendApplications();
   gateway.PullConversationMessages(8001, 7, 60);
-  gateway.PullAllMessages(99, 40);
   gateway.SendFriendRequest(43, QStringLiteral("hello"));
   gateway.ReplyFriendRequest(43, true, QStringLiteral("welcome"));
   gateway.SendText(43, QByteArrayLiteral("text"), QStringLiteral("client-text"),
@@ -297,13 +296,12 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
   gateway.SendGroupText(5001, QByteArrayLiteral("group text"),
                         QStringLiteral("client-group"), 8100);
 
-  QTRY_COMPARE(responses.count(), 13);
+  QTRY_COMPARE(responses.count(), 12);
   QCOMPARE(failures.count(), 0);
   const QVector<quint32> expectedServices = {
       protocol::PullFriendListRequest,
       protocol::PullFriendApplyListRequest,
       protocol::PullSessionMessagesRequest,
-      protocol::PullMessagesRequest,
       protocol::AddFriendRequest,
       protocol::ReplyFriendRequest,
       protocol::SendTextRequest,

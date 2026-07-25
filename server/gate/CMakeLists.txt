@@ -12,8 +12,6 @@ find_package(Boost REQUIRED COMPONENTS filesystem)
 find_package(gRPC REQUIRED)
 find_package(CURL REQUIRED)
 
-set(protobuf_MODULE_COMPATIBLE TRUE)
-
 file(GLOB SOURCE src/**/*.cc)
 add_library(imGate ${SOURCE})
 add_executable(gate src/main.cc)

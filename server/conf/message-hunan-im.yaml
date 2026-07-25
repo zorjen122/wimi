@@ -5,18 +5,7 @@ server:
   self:
     name : hunan-im
     host: 0.0.0.0
-    port: 8190
     rpcPort: 50055
-    legacyClientTcp: false
-    legacyPeerRpc: false
-  im:
-    s1:
-      name: beijing-im
-      host: 127.0.0.1
-      port: 8091
-      rpcPort: 50056
-      rpcCount: 1
-    im-total: 1
   file:
     host: 127.0.0.1
     rpcPort: 51000

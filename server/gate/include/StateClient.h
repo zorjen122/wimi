@@ -33,10 +33,7 @@ class ServerNode {
 class StateClient : public Singleton<StateClient> {
  public:
   ServerNode PickConnectionGateway(int uid);
-  ServerNode GetImServer(int uid);
-  ServerNode ActiveImBackupServer(int uid);
   StateClient();
-  std::string TestNetworkPing();
 
  private:
   std::unique_ptr<RpcPool<StateService>> rpcPool = nullptr;

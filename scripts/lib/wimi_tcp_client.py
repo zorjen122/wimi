@@ -41,14 +41,11 @@ ID_ACK = 1033
 
 
 FIELD_MAP = {
-    "sessionKey": "session_key",
-    "lastMsgId": "last_msg_id",
     "requestMessage": "request_message",
     "replyMessage": "reply_message",
     "headImageURL": "head_image_url",
     "fileName": "file_name",
     "groupName": "group_name",
-    "groupId": "group_id",
     "managerUid": "manager_uid",
     "requestorUid": "requestor_uid",
     "replyorUid": "replyor_uid",
@@ -105,10 +102,8 @@ def decode_packet(data):
         ("from", "from"),
         ("to", "to"),
         ("data", "data"),
-        ("session_key", "sessionKey"),
         ("error", "error"),
         ("message", "message"),
-        ("status", "status"),
         ("accept", "accept"),
         ("request_message", "requestMessage"),
         ("reply_message", "replyMessage"),
@@ -121,10 +116,8 @@ def decode_packet(data):
         ("file_name", "fileName"),
         ("file_type", "type"),
         ("type", "type"),
-        ("last_msg_id", "lastMsgId"),
         ("limit", "limit"),
         ("gid", "gid"),
-        ("group_id", "groupId"),
         ("group_name", "groupName"),
         ("manager_uid", "managerUid"),
         ("requestor_uid", "requestorUid"),
@@ -241,6 +234,7 @@ class WimClient:
         self.pending = []
         self.async_ack_ids = set(async_ack_ids or [])
         self.auto_ack = auto_ack
+        self.next_request_id = 1
 
     def close(self):
         try:
@@ -249,8 +243,15 @@ class WimClient:
             pass
 
     def send_packet(self, service_id, body):
+        body = dict(body)
+        body.setdefault("requestId", self._allocate_request_id())
         data = encode_packet(body)
         self.sock.sendall(struct.pack("!II", service_id, len(data)) + data)
+
+    def _allocate_request_id(self):
+        request_id = f"smoke-{self.uid}-{self.next_request_id}"
+        self.next_request_id += 1
+        return request_id
 
     def recv_exact(self, size):
         chunks = []
@@ -297,6 +298,8 @@ class WimClient:
         if auto_ack is None:
             auto_ack = self.auto_ack
 
+        body = dict(body)
+        body.setdefault("requestId", self._allocate_request_id())
         self.send_packet(service_id, body)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -316,6 +319,8 @@ class WimClient:
     def request_with_retry(self, service_id, body, attempts=3, timeout=5,
                            base_delay=0.2, expected_id=None):
         """Retry one logical command without changing its idempotency fields."""
+        body = dict(body)
+        body.setdefault("requestId", self._allocate_request_id())
         last_error = None
         for attempt in range(attempts):
             try:

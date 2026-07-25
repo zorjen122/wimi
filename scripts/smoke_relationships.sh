@@ -48,8 +48,6 @@ friend_msg="friend_apply_${stamp}"
 friend_reply="friend_reply_${stamp}"
 group_name="rel_group_${stamp}"
 join_msg="join_group_${stamp}"
-pull_payload="pull_message_${stamp}"
-message_id=$((uid_a * 1000 + 7))
 result_file="$(mktemp /tmp/wimi-relationships.XXXXXX.json)"
 trap 'rm -f "$result_file"' EXIT
 
@@ -85,10 +83,6 @@ INSERT INTO userInfo (uid, name, age, sex, headImageURL) VALUES
   ($uid_a, 'RelA', 21, 'test', '/images/rel-a.png'),
   ($uid_b, 'RelB', 22, 'test', '/images/rel-b.png');
 
-INSERT INTO messages
-  (messageId, senderId, receiverId, sessionKey, type, content, status, sendDateTime, readDateTime)
-VALUES
-  ($message_id, $uid_a, $uid_b, '0', 1, '$pull_payload', 1, '2026-07-10 00:00:00', '');
 SQL
 
 UID_A="$uid_a" \
@@ -99,7 +93,6 @@ FRIEND_MSG="$friend_msg" \
 FRIEND_REPLY="$friend_reply" \
 GROUP_NAME="$group_name" \
 JOIN_MSG="$join_msg" \
-PULL_PAYLOAD="$pull_payload" \
 CHAT_HOST="$CHAT_HOST" \
 CHAT_PORT="$CHAT_PORT" \
 GATE_URL="$GATE_URL" \
@@ -119,7 +112,6 @@ FRIEND_MSG = os.environ["FRIEND_MSG"]
 FRIEND_REPLY = os.environ["FRIEND_REPLY"]
 GROUP_NAME = os.environ["GROUP_NAME"]
 JOIN_MSG = os.environ["JOIN_MSG"]
-PULL_PAYLOAD = os.environ["PULL_PAYLOAD"]
 CHAT_HOST = os.environ["CHAT_HOST"]
 CHAT_PORT = int(os.environ["CHAT_PORT"])
 RESULT_FILE = os.environ["RESULT_FILE"]
@@ -127,8 +119,6 @@ GATE_URL = os.environ["GATE_URL"]
 
 ID_PULL_FRIEND_LIST_REQ = 1001
 ID_PULL_FRIEND_APPLY_LIST_REQ = 1003
-ID_PULL_SESSION_MESSAGE_LIST_REQ = 1005
-ID_PULL_MESSAGE_LIST_REQ = 1007
 ID_NOTIFY_ADD_FRIEND_REQ = 1021
 ID_REPLY_ADD_FRIEND_REQ = 1023
 ID_GROUP_CREATE_REQ = 1035
@@ -188,26 +178,6 @@ def check_friend_reply_and_pulls(client):
     require(
         any(item.get("uid") == UID_A for item in friends_rsp.get("friendList", [])),
         f"friend list missing uid {UID_A}: {friends_rsp}",
-    )
-
-    session_rsp = client.request(
-        ID_PULL_SESSION_MESSAGE_LIST_REQ,
-        {"from": UID_A, "to": UID_B, "lastMsgId": 0, "limit": 10},
-    )
-    require(session_rsp.get("error") == 0, f"pull session messages failed: {session_rsp}")
-    require(
-        any(item.get("content") == PULL_PAYLOAD for item in session_rsp.get("messageList", [])),
-        f"session message list missing payload {PULL_PAYLOAD}: {session_rsp}",
-    )
-
-    all_rsp = client.request(
-        ID_PULL_MESSAGE_LIST_REQ,
-        {"uid": UID_B, "lastMsgId": 0, "limit": 10},
-    )
-    require(all_rsp.get("error") == 0, f"pull all messages failed: {all_rsp}")
-    require(
-        any(item.get("content") == PULL_PAYLOAD for item in all_rsp.get("messageList", [])),
-        f"user message list missing payload {PULL_PAYLOAD}: {all_rsp}",
     )
 
 

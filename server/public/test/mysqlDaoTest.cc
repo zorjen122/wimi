@@ -140,17 +140,8 @@ TEST_F(MysqlDaoTest, TestMessageOperations) {
   int msgResult = dao->insertMessage(msg);
   EXPECT_NE(msgResult, -1) << "Message insert failed";
 
-  auto messages =
-      dao->getSessionMessage(TEST_UID, TEST_FRIEND_UID, TEST_MESSAGE_ID, 10);
-  EXPECT_NE(messages, nullptr) << "No messages found";
-  EXPECT_FALSE(messages->empty()) << "Message not retrieved";
-
-  messages = dao->getUserMessage(TEST_UID, TEST_MESSAGE_ID, 10);
-  EXPECT_NE(messages, nullptr) << "No messages found";
-  EXPECT_FALSE(messages->empty()) << "Message not retrieved";
-
   int updateResult =
-      dao->updateMessage(TEST_MESSAGE_ID, 2);  // status 2 is done
+      dao->updateMessage(TEST_MESSAGE_ID, 2);  // status 2 is delivered
   EXPECT_EQ(updateResult, 0) << "Message update failed";
 }
 

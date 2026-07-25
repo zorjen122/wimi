@@ -13,19 +13,14 @@ namespace wimi {
 
 MessageService::AcceptedText MessageService::AcceptText(TcpPacket request) {
   AcceptedText result;
-  const int64_t clientSeq = request.seq();
   const int64_t from = request.uid();
   const int64_t to = request.to();
   const std::string data = request.data();
-  const std::string clientMessageId =
-      request.has_client_message_id() && !request.client_message_id().empty()
-          ? request.client_message_id()
-          : std::to_string(clientSeq);
+  const std::string clientMessageId = request.client_message_id();
 
-  result.response.set_seq(clientSeq);
   result.response.set_client_message_id(clientMessageId);
-  if (from <= 0 || to <= 0 || data.empty() || clientMessageId.empty() ||
-      (!request.has_client_message_id() && clientSeq <= 0)) {
+  if (from <= 0 || to <= 0 || data.empty() || !request.has_client_message_id() ||
+      clientMessageId.empty()) {
     result.response.set_error(ErrorCodes::JsonParser);
     result.response.set_message(
         "actor, to, data and client_message_id are required");
@@ -48,11 +43,9 @@ MessageService::AcceptedText MessageService::AcceptText(TcpPacket request) {
     return result;
   }
 
-  result.response.set_status("accepted");
   result.response.set_message_id(accepted.messageId);
   result.response.set_conversation_id(accepted.conversationId);
   result.response.set_conversation_seq(accepted.conversationSeq);
-  result.response.set_session_key(accepted.conversationId);
   result.response.set_message_state(protocol::MESSAGE_STATE_ACCEPTED);
   result.response.set_retryable(false);
 
@@ -63,7 +56,6 @@ MessageService::AcceptedText MessageService::AcceptText(TcpPacket request) {
   request.set_client_message_id(clientMessageId);
   request.set_conversation_id(accepted.conversationId);
   request.set_conversation_seq(accepted.conversationSeq);
-  request.set_session_key(accepted.conversationId);
   request.set_message_state(protocol::MESSAGE_STATE_ACCEPTED);
   request.set_send_date_time(sendDateTime);
   result.forwardPacket = std::move(request);
@@ -75,23 +67,15 @@ MessageService::AcceptedText MessageService::AcceptText(TcpPacket request) {
 MessageService::AcceptedGroupText MessageService::AcceptGroupText(
     TcpPacket request) {
   AcceptedGroupText result;
-  const int64_t clientSeq = request.seq();
   const int64_t sender = request.uid();
-  const int64_t groupId =
-      request.has_gid() ? request.gid()
-                        : (request.has_group_id() ? request.group_id() : 0);
+  const int64_t groupId = request.gid();
   const std::string content = request.data();
-  const std::string clientMessageId =
-      request.has_client_message_id() && !request.client_message_id().empty()
-          ? request.client_message_id()
-          : std::to_string(clientSeq);
+  const std::string clientMessageId = request.client_message_id();
 
-  result.response.set_seq(clientSeq);
   result.response.set_client_message_id(clientMessageId);
   result.response.set_gid(groupId);
   if (sender <= 0 || groupId <= 0 || content.empty() ||
-      clientMessageId.empty() ||
-      (!request.has_client_message_id() && clientSeq <= 0)) {
+      !request.has_client_message_id() || clientMessageId.empty()) {
     result.response.set_error(ErrorCodes::JsonParser);
     result.response.set_message(
         "actor, gid, data and client_message_id are required");
@@ -114,11 +98,9 @@ MessageService::AcceptedGroupText MessageService::AcceptGroupText(
     return result;
   }
 
-  result.response.set_status("accepted");
   result.response.set_message_id(accepted.messageId);
   result.response.set_conversation_id(accepted.conversationId);
   result.response.set_conversation_seq(accepted.conversationSeq);
-  result.response.set_session_key(accepted.conversationId);
   result.response.set_message_state(protocol::MESSAGE_STATE_ACCEPTED);
   result.response.set_retryable(false);
 
@@ -129,7 +111,6 @@ MessageService::AcceptedGroupText MessageService::AcceptGroupText(
   request.set_client_message_id(clientMessageId);
   request.set_conversation_id(accepted.conversationId);
   request.set_conversation_seq(accepted.conversationSeq);
-  request.set_session_key(accepted.conversationId);
   request.set_message_state(protocol::MESSAGE_STATE_ACCEPTED);
   request.set_send_date_time(sendDateTime);
   result.forwardPacket = std::move(request);
@@ -226,100 +207,41 @@ TcpPacket MessageService::PullSessionMessages(uint32_t msgID,
                                               TcpPacket &request) {
   TcpPacket rsp;
 
-  if (request.has_conversation_id()) {
-    const int64_t conversationId = request.conversation_id();
-    const int64_t afterSeq = request.has_after_seq() ? request.after_seq() : 0;
-    const int limit = request.has_limit() ? request.limit() : 50;
-    auto sync = db::MysqlDao::GetInstance()->syncConversation(
-        request.uid(), conversationId, afterSeq, limit);
-    rsp.set_error(sync.error);
-    rsp.set_conversation_id(conversationId);
-    rsp.set_latest_seq(sync.latestSeq);
-    rsp.set_next_seq(sync.nextSeq);
-    rsp.set_has_more(sync.hasMore);
-    if (sync.conversationType == 1)
-      rsp.set_conversation_type(protocol::CONVERSATION_TYPE_DIRECT);
-    else if (sync.conversationType == 2)
-      rsp.set_conversation_type(protocol::CONVERSATION_TYPE_GROUP);
-    if (sync.error != ErrorCodes::Success)
-      return rsp;
-    for (const auto &message : sync.messages) {
-      auto *item = rsp.add_message_list();
-      item->set_message_id(message.messageId);
-      item->set_from(message.senderId);
-      item->set_to(message.receiverId);
-      item->set_conversation_id(message.conversationId);
-      item->set_conversation_seq(message.conversationSeq);
-      item->set_client_message_id(message.clientMessageId);
-      item->set_type(message.type);
-      item->set_content(message.content);
-      item->set_status(message.status);
-      item->set_send_date_time(message.sendDateTime);
-      item->set_read_date_time(message.readDateTime);
-    }
+  if (!request.has_conversation_id() || request.conversation_id() <= 0) {
+    rsp.set_error(ErrorCodes::JsonParser);
     return rsp;
   }
 
-  int64_t from = request.from();
-  int64_t to = request.to();
-  int64_t lastMsgId = request.last_msg_id();
-  int limit = request.limit();
-
-  auto messageList = db::MysqlDao::GetInstance()->getSessionMessage(
-      from, to, lastMsgId, limit);
-  if (messageList == nullptr) {
-    LOG_INFO(wimi::businessLogger,
-             "消息表为空, from: {}, to: {}, lastMsgId: {}, limit: {}", from, to,
-             lastMsgId, limit);
-
-    rsp.set_error(ErrorCodes::Success);
+  const int64_t conversationId = request.conversation_id();
+  const int64_t afterSeq = request.has_after_seq() ? request.after_seq() : 0;
+  const int limit = request.has_limit() ? request.limit() : 50;
+  auto sync = db::MysqlDao::GetInstance()->syncConversation(
+      request.uid(), conversationId, afterSeq, limit);
+  rsp.set_error(sync.error);
+  rsp.set_conversation_id(conversationId);
+  rsp.set_latest_seq(sync.latestSeq);
+  rsp.set_next_seq(sync.nextSeq);
+  rsp.set_has_more(sync.hasMore);
+  if (sync.conversationType == 1)
+    rsp.set_conversation_type(protocol::CONVERSATION_TYPE_DIRECT);
+  else if (sync.conversationType == 2)
+    rsp.set_conversation_type(protocol::CONVERSATION_TYPE_GROUP);
+  if (sync.error != ErrorCodes::Success)
     return rsp;
-  }
-
-  rsp.set_uid(to);
-  for (auto message : *messageList) {
+  for (const auto &message : sync.messages) {
     auto *item = rsp.add_message_list();
-    item->set_message_id(message->messageId);
-    item->set_type(message->type);
-    item->set_content(message->content);
-    item->set_status(message->status);
-    item->set_send_date_time(message->sendDateTime);
-    item->set_read_date_time(message->readDateTime);
+    item->set_message_id(message.messageId);
+    item->set_from(message.senderId);
+    item->set_to(message.receiverId);
+    item->set_conversation_id(message.conversationId);
+    item->set_conversation_seq(message.conversationSeq);
+    item->set_client_message_id(message.clientMessageId);
+    item->set_type(message.type);
+    item->set_content(message.content);
+    item->set_status(message.status);
+    item->set_send_date_time(message.sendDateTime);
+    item->set_read_date_time(message.readDateTime);
   }
-  rsp.set_error(ErrorCodes::Success);
-  return rsp;
-}
-
-TcpPacket MessageService::PullMessages(uint32_t msgID, TcpPacket &request) {
-  TcpPacket rsp;
-
-  int64_t uid = request.uid();
-  int64_t lastMsgId = request.last_msg_id();
-  int limit = request.limit();
-
-  rsp.set_uid(uid);
-
-  auto messageList =
-      db::MysqlDao::GetInstance()->getUserMessage(uid, lastMsgId, limit);
-  if (messageList == nullptr) {
-    LOG_INFO(wimi::businessLogger,
-             "消息表为空,  uid: {}, lastMsgId: {}, limit: {}", uid, lastMsgId,
-             limit);
-
-    rsp.set_error(ErrorCodes::Success);
-    return rsp;
-  }
-
-  for (auto message : *messageList) {
-    auto *item = rsp.add_message_list();
-    item->set_message_id(message->messageId);
-    item->set_type(message->type);
-    item->set_content(message->content);
-    item->set_status(message->status);
-    item->set_send_date_time(message->sendDateTime);
-    item->set_read_date_time(message->readDateTime);
-  }
-  rsp.set_error(ErrorCodes::Success);
   return rsp;
 }
 

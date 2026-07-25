@@ -9,7 +9,7 @@ message ConnectUser {
 message ConnectUserRsp {
   string ip = 1;      // 客户端可连接的节点地址
   int32 port = 2;     // 客户端可连接的 TCP 端口
-  string node_id = 3; // 被选中的 Gateway/旧 IM 节点 ID
+  string node_id = 3; // 被选中的 Gateway 节点 ID
 }
 
 // Gateway 拉取 Message 拓扑时携带的本地版本。
@@ -32,19 +32,9 @@ message MessageTopology {
   repeated ServiceNode nodes = 2; // 当前可见的 Message 节点列表
 }
 
-message TestNetwork {
-  string msg = 1; // 网络探测的请求/响应文本
-}
-
 service StateService {
   // 为客户端选择 Connection Gateway。
   rpc PickConnectionGateway(ConnectUser) returns (ConnectUserRsp) {}
   // 返回版本化 Message 节点拓扑。
   rpc ListMessageNodes(TopologyRequest) returns (MessageTopology) {}
-  // 兼容旧客户端的 Chat 节点选择接口。
-  rpc GetImServer(ConnectUser) returns (ConnectUserRsp) {}
-  // 兼容旧拓扑的备用 Chat 激活接口。
-  rpc ActiveImBackupServer(ConnectUser) returns (ConnectUserRsp) {}
-  // 兼容旧拓扑的网络探测接口。
-  rpc TestNetworkPing(TestNetwork) returns (TestNetwork) {}
 }

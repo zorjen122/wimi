@@ -44,7 +44,6 @@ class ConnectionGatewayClient final : public QObject {
   QString PullFriendApplications();
   QString PullConversationMessages(std::int64_t conversationId,
                                    std::int64_t afterSequence, int limit = 50);
-  QString PullAllMessages(std::int64_t lastMessageId, int limit = 50);
   QString SendFriendRequest(std::int64_t recipientUid, const QString &message);
   QString ReplyFriendRequest(std::int64_t recipientUid, bool accept,
                              const QString &message);
@@ -102,7 +101,6 @@ class ConnectionGatewayClient final : public QObject {
   void ScheduleReconnect();
   void StartSocket();
   void SetState(State state);
-  std::int64_t NextLegacySequence();
 
   QTcpSocket socket_;
   TcpFrameCodec codec_;
@@ -113,7 +111,6 @@ class ConnectionGatewayClient final : public QObject {
   GateSession session_;
   State state_{State::Disconnected};
   qint64 token_expires_at_milliseconds_{};
-  std::int64_t next_legacy_sequence_{};
   int reconnect_attempt_{};
   bool desired_open_{};
 };

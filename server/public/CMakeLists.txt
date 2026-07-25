@@ -5,8 +5,6 @@ project(imPublic)
 set(CMAKE_EXPORT_COMPILE_COMMANDS true)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
-set(protobuf_MODULE_COMPATIBLE TRUE)
-
 # 仅用于clangd搜索
 find_package(Threads REQUIRED)
 find_package(Protobuf REQUIRED)
@@ -19,7 +17,6 @@ file(GLOB SOURCES src/*.cc)
 set(WIMI_PUBLIC_PROTO_FILES
     proto/file.proto
     proto/gateway_message.proto
-    proto/im.proto
     proto/state.proto
     proto/tcp_message.proto)
 

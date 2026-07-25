@@ -47,7 +47,6 @@ TcpPacket GroupService::Create(unsigned int msgID, TcpPacket &request) {
   }
 
   rsp.set_error(ErrorCodes::Success);
-  rsp.set_session_key(sessionKey);
   return rsp;
 }
 

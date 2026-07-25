@@ -184,7 +184,7 @@ start_service() {
   local cwd="$2"
   shift 2
   echo "Starting $name..."
-  (cd "$cwd" && exec setsid "$@") &
+  (cd "$cwd" && exec "$@") &
   pids+=("$!")
   sleep 1
   if ! kill -0 "${pids[-1]}" >/dev/null 2>&1; then

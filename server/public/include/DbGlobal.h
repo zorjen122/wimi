@@ -105,12 +105,11 @@ struct Message {
   using Ptr = std::shared_ptr<Message>;
   using MessageGroup = std::shared_ptr<std::vector<Message::Ptr>>;
   enum Type { TEXT = 1, IMAGE = 2, AUDIO = 3, VIDEO = 4, FILE = 5 };
-  // 数值顺序用于数据库 GREATEST 单调推进；DONE 保留为兼容别名。
+  // 数值顺序用于数据库 GREATEST 单调推进。
   enum Status {
     WITHDRAW = 0,
     WAIT = 1,
     DELIVERED = 2,
-    DONE = DELIVERED,
     READ = 3,
   };
   Message() = default;

@@ -31,7 +31,6 @@ TcpPacket FriendService::NotifyAddFriend(unsigned int msgID,
 
   long from = request.uid();
   long to = request.to();
-  // actor 只取 canonical uid，from 仅作为接收端兼容展示字段。
   request.set_from(from);
 
   int ret = StoreNotifyAddFriend(request);
@@ -46,7 +45,6 @@ TcpPacket FriendService::NotifyAddFriend(unsigned int msgID,
   }
 
   TcpPacket senderRsp = request;
-  senderRsp.clear_skip_storage();
   senderRsp.set_seq(db::RedisDao::GetInstance()->generateMsgId());
   if (clientForwardService.ForwardToGateway(
           to, SerializeTcpPacket(senderRsp), ID_NOTIFY_ADD_FRIEND_REQ)) {
@@ -75,8 +73,7 @@ TcpPacket FriendService::ReplyAddFriend(unsigned int msgID,
 
   rsp.set_uid(to);
 
-  long sessionKey = StoreReplyAddFriend(request);
-  if (sessionKey == -1) {
+  if (StoreReplyAddFriend(request) == -1) {
     LOG_ERROR(businessLogger,
               "StoreageReplyAddFriend is failed, from {}, to {}", from, to);
     rsp.set_error(ErrorCodes::MysqlFailed);
@@ -88,7 +85,6 @@ TcpPacket FriendService::ReplyAddFriend(unsigned int msgID,
   senderRsp.set_from(from);
   senderRsp.set_to(to);
   senderRsp.set_uid(to);
-  senderRsp.set_session_key(sessionKey);
   senderRsp.set_accept(accept);
   senderRsp.set_reply_message(replyMessage);
   senderRsp.set_seq(db::RedisDao::GetInstance()->generateMsgId());

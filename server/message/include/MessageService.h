@@ -37,8 +37,6 @@ class MessageService {
   TcpPacket SendFile(uint32_t msgID, TcpPacket &request);
   TcpPacket SendGroupText(uint32_t msgID, TcpPacket &request);
   TcpPacket PullSessionMessages(uint32_t msgID, TcpPacket &request);
-  TcpPacket PullMessages(uint32_t msgID, TcpPacket &request);
-
 };
 
 }  // namespace wimi

@@ -20,10 +20,10 @@ class GroupService {
   TcpPacket Quit(unsigned int msgID, TcpPacket &request);
 
  private:
-  int NotifyMemberJoin(int64_t uid, int64_t gid,
+  int NotifyMemberJoin(int64_t uid, int64_t groupId,
                        const std::string &requestMessage);
-  int NotifyMemberReply(int64_t gid, int64_t managerUid, int64_t requestorUid,
-                        bool accept);
+  int NotifyMemberReply(int64_t groupId, int64_t managerUid,
+                        int64_t requestorUid, bool accept);
 
   ClientForwardService &clientForwardService;
 };

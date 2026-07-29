@@ -5,6 +5,7 @@
 
 #include <QDateTime>
 #include <QRandomGenerator>
+#include <QSettings>
 #include <QUuid>
 
 #include <algorithm>
@@ -35,6 +36,7 @@ ConnectionGatewayClient::ConnectionGatewayClient(QObject *parent)
     SetState(State::Authenticating);
     wimi::protocol::Packet login;
     login.setUid(session_.uid);
+    login.setDeviceId(device_id_);
     login.setAuthToken(session_.token);
     login.setInit(session_.profileInitializationRequired);
     if (session_.profileInitializationRequired) {
@@ -102,6 +104,14 @@ void ConnectionGatewayClient::Open(const GateSession &session) {
     socket_.abort();
   }
   session_ = session;
+  QSettings settings;
+  const QString deviceKey = QStringLiteral("devices/%1/id").arg(session.uid);
+  device_id_ = settings.value(deviceKey).toString();
+  if (device_id_.isEmpty()) {
+    device_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    settings.setValue(deviceKey, device_id_);
+    settings.sync();
+  }
   token_expires_at_milliseconds_ =
       QDateTime::currentMSecsSinceEpoch() +
       std::max<qint64>(0, session.tokenExpiresInSeconds) * 1000;
@@ -200,7 +210,7 @@ QString ConnectionGatewayClient::CreateGroup(const QString &groupName) {
 QString ConnectionGatewayClient::RequestJoinGroup(std::int64_t groupId,
                                                   const QString &message) {
   wimi::protocol::Packet packet;
-  packet.setGid(groupId);
+  packet.setGroupId(groupId);
   packet.setRequestMessage(message);
   return QueueRequest(protocol::JoinGroupRequest, std::move(packet));
 }
@@ -209,7 +219,7 @@ QString ConnectionGatewayClient::ReplyJoinGroup(std::int64_t groupId,
                                                 std::int64_t requestorUid,
                                                 bool accept) {
   wimi::protocol::Packet packet;
-  packet.setGid(groupId);
+  packet.setGroupId(groupId);
   packet.setRequestorUid(requestorUid);
   packet.setAccept(accept);
   return QueueRequest(protocol::ReplyJoinGroupRequest, std::move(packet));
@@ -220,7 +230,7 @@ QString ConnectionGatewayClient::SendGroupText(std::int64_t groupId,
                                                const QString &clientMessageId,
                                                std::int64_t conversationId) {
   wimi::protocol::Packet packet;
-  packet.setGid(groupId);
+  packet.setGroupId(groupId);
   packet.setData(utf8Text);
   packet.setClientMessageId(clientMessageId);
   if (conversationId > 0) {
@@ -374,7 +384,8 @@ void ConnectionGatewayClient::SendPacket(quint32 serviceId,
                                          wimi::protocol::Packet packet) {
   // QueueRequest already assigns a stable ID before serializing queued business
   // requests. Direct packets (login, ping, quit, and receipts) pass through
-  // here, so make the Gateway's request_id invariant universal at this boundary.
+  // here, so make the Gateway's request_id invariant universal at this
+  // boundary.
   if (!packet.hasRequestId() || packet.requestId().isEmpty()) {
     packet.setRequestId(NewRequestId());
   }

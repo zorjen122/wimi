@@ -109,6 +109,7 @@ class ConnectionGatewayClient final : public QObject {
   QHash<quint32, QQueue<PendingRequest>> pending_by_response_;
   QHash<quint32, QTimer *> request_timers_;
   GateSession session_;
+  QString device_id_;
   State state_{State::Disconnected};
   qint64 token_expires_at_milliseconds_{};
   int reconnect_attempt_{};

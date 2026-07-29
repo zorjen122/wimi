@@ -116,8 +116,8 @@ TEST_F(MysqlDaoTest, TestFriendApplyOperations) {
 TEST_F(MysqlDaoTest, TestFriendOperations) {
   std::shared_ptr<MysqlDao> dao = MysqlDao::GetInstance();
 
-  Friend::Ptr newFriend(new Friend(TEST_UID, TEST_FRIEND_UID,
-                                   "2023-01-01 00:00:00", 1323214125123));
+  Friend::Ptr newFriend(new Friend(1323214125123, 1323214125124, TEST_UID,
+                                   TEST_FRIEND_UID, "2023-01-01 00:00:00"));
 
   int addResult = dao->insertFriend(newFriend);
   EXPECT_NE(addResult, -1) << "Add friend failed";
@@ -131,7 +131,7 @@ TEST_F(MysqlDaoTest, TestMessageOperations) {
   std::shared_ptr<MysqlDao> dao = MysqlDao::GetInstance();
 
   Message::Ptr msg(new Message(TEST_MESSAGE_ID, TEST_UID, TEST_FRIEND_UID,
-                               "3241",
+                               1323214125123, 1,
                                1,  // text
                                "Hello World",
                                1,  // wait
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
   assert(ret != -1);
   ret = p->updateGroupApply(apply);
   assert(ret != -1);
-  apply->gid = 9;
+  apply->groupId = 9;
   ret = p->insertGroupApply(apply);
   assert(ret != -1);
   list = p->pullGroupApply(apply->requestor);

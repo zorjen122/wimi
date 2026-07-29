@@ -18,10 +18,12 @@ class SessionRegistry {
   SessionRegistry(std::string gatewayId, std::string instanceId,
                   long leaseTtlSeconds = 60);
 
-  db::SessionLease Bind(int64_t uid,
+  db::SessionLease Bind(int64_t uid, const std::string &deviceId,
                         const std::shared_ptr<GatewaySession> &session);
-  bool Refresh(int64_t uid, const db::SessionLease &lease);
-  void Remove(int64_t uid, const std::shared_ptr<GatewaySession> &session,
+  bool Refresh(int64_t uid, const std::string &deviceId,
+               const db::SessionLease &lease);
+  void Remove(int64_t uid, const std::string &deviceId,
+              const std::shared_ptr<GatewaySession> &session,
               const db::SessionLease &lease);
   gateway::ClientForwardStatus Forward(
       const gateway::ClientForwardEnvelope &forward);
@@ -39,7 +41,8 @@ class SessionRegistry {
   std::string instanceId;
   long leaseTtlSeconds;
   std::mutex mutex;
-  std::unordered_map<int64_t, LocalSession> sessions;
+  std::unordered_map<int64_t, std::unordered_map<std::string, LocalSession>>
+      sessions;
 };
 
 }  // namespace wimi::connection

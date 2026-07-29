@@ -168,7 +168,7 @@ asio::awaitable<void> GatewaySession::Run() {
     co_await asio::co_spawn(
         businessPool,
         [this, self, uid]() -> asio::awaitable<void> {
-          registry.Remove(uid, self, lease);
+          registry.Remove(uid, lease.deviceId, self, lease);
           co_return;
         },
         asio::use_awaitable);
@@ -251,7 +251,8 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
   /*
     活跃连接每 20 秒至多刷新一次 lease 租约，失败表示该连接已被新连接取代。
     采用这种手法可以在处理假死连接的同时，可以拒绝旧连接再发请求，保证唯一性。
-    所以后续 gateway 与 client 没有双向心跳机制，只有单向，因为目前实现覆盖了这点。
+    所以后续 gateway 与 client
+    没有双向心跳机制，只有单向，因为目前实现覆盖了这点。
   */
   if (!(co_await RefreshLeaseIfNeeded(actor)))
     co_return;
@@ -321,6 +322,7 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
   command.set_actor_uid(actor);
   command.set_connection_id(connectionId);
   command.set_connection_generation(lease.generation);
+  command.set_actor_device_id(lease.deviceId);
   command.set_service_id(protocolId);
   if (request.has_conversation_id())
     command.set_conversation_id(request.conversation_id());
@@ -371,7 +373,7 @@ asio::awaitable<bool> GatewaySession::RefreshLeaseIfNeeded(int64_t actor) {
   const bool refreshed = co_await asio::co_spawn(
       businessPool,
       [this, actor, currentLease = lease]() -> asio::awaitable<bool> {
-        co_return registry.Refresh(actor, currentLease);
+        co_return registry.Refresh(actor, currentLease.deviceId, currentLease);
       },
       asio::use_awaitable);
   if (!refreshed) {
@@ -444,7 +446,8 @@ asio::awaitable<void> GatewaySession::WriteLoop() {
 GatewaySession::AuthResult GatewaySession::Authenticate(TcpPacket request) {
   AuthResult result;
   const int64_t uid = request.uid();
-  if (uid <= 0 || !request.has_auth_token() ||
+  if (uid <= 0 || !request.has_device_id() || request.device_id().empty() ||
+      request.device_id().size() > 36 || !request.has_auth_token() ||
       !db::RedisDao::GetInstance()->validateChatAuthToken(
           uid, request.auth_token())) {
     result.error = ErrorCodes::TokenInvalid;
@@ -487,7 +490,19 @@ GatewaySession::AuthResult GatewaySession::Authenticate(TcpPacket request) {
     }
   }
 
-  result.lease = registry.Bind(uid, shared_from_this());
+  const int deviceRegistration =
+      db::MysqlDao::GetInstance()->registerDevice(uid, request.device_id());
+  if (deviceRegistration <= 0) {
+    result.error = deviceRegistration < 0 ? ErrorCodes::MysqlFailed
+                                          : ErrorCodes::AuthenticationRequired;
+    result.response =
+        MakeErrorPacket(result.error, deviceRegistration < 0
+                                          ? "failed to register device"
+                                          : "device is bound to another user");
+    return result;
+  }
+
+  result.lease = registry.Bind(uid, request.device_id(), shared_from_this());
   if (result.lease.empty()) {
     result.error = ErrorCodes::DependencyUnavailable;
     result.response = MakeErrorPacket(ErrorCodes::DependencyUnavailable,
@@ -497,6 +512,7 @@ GatewaySession::AuthResult GatewaySession::Authenticate(TcpPacket request) {
 
   result.error = ErrorCodes::Success;
   result.response.set_uid(uid);
+  result.response.set_device_id(request.device_id());
   result.response.set_name(info->name);
   result.response.set_age(info->age);
   result.response.set_sex(info->sex);

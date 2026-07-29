@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import uuid
 
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parents[2]
@@ -46,6 +47,7 @@ FIELD_MAP = {
     "headImageURL": "head_image_url",
     "fileName": "file_name",
     "groupName": "group_name",
+    "groupId": "group_id",
     "managerUid": "manager_uid",
     "requestorUid": "requestor_uid",
     "replyorUid": "replyor_uid",
@@ -64,6 +66,7 @@ FIELD_MAP = {
     "conversationSeq": "conversation_seq",
     "clientMessageId": "client_message_id",
     "afterSeq": "after_seq",
+    "deviceId": "device_id",
 }
 
 
@@ -117,7 +120,7 @@ def decode_packet(data):
         ("file_type", "type"),
         ("type", "type"),
         ("limit", "limit"),
-        ("gid", "gid"),
+        ("group_id", "groupId"),
         ("group_name", "groupName"),
         ("manager_uid", "managerUid"),
         ("requestor_uid", "requestorUid"),
@@ -144,6 +147,7 @@ def decode_packet(data):
         ("has_more", "hasMore"),
         ("latest_seq", "latestSeq"),
         ("conversation_type", "conversationType"),
+        ("device_id", "deviceId"),
     ]
 
     for proto_name, json_name in scalar_fields:
@@ -226,8 +230,9 @@ def request_chat_auth(username, password, gate_url="http://127.0.0.1:18080"):
 
 class WimClient:
     def __init__(self, uid, host, port, timeout=5, async_ack_ids=None,
-                 auto_ack=False, auth_token=None):
+                 auto_ack=False, auth_token=None, device_id=None):
         self.uid = uid
+        self.device_id = device_id or str(uuid.uuid4())
         self.auth_token = auth_token
         self.sock = socket.create_connection((host, port), timeout=timeout)
         self.sock.settimeout(timeout)
@@ -287,8 +292,7 @@ class WimClient:
 
     def ack_async(self, service_id, payload):
         if service_id in self.async_ack_ids and "seq" in payload:
-            receipt_type = 1 if service_id == 1027 else 3
-            self.ack(payload["seq"], receipt_type)
+            self.ack(payload["seq"])
             return True
         return False
 
@@ -354,7 +358,11 @@ class WimClient:
         raise TimeoutError(f"uid {self.uid} did not receive async service {service_id}")
 
     def login(self, init=None):
-        body = {"uid": self.uid, "authToken": self.auth_token or ""}
+        body = {
+            "uid": self.uid,
+            "authToken": self.auth_token or "",
+            "deviceId": self.device_id,
+        }
         if init is not None:
             body["init"] = init
         rsp = self.request(ID_LOGIN_INIT_REQ, body)

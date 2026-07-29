@@ -2,6 +2,7 @@
 
 #include "TcpMessageCodec.h"
 
+#include <string>
 #include <vector>
 
 namespace wimi {
@@ -32,11 +33,11 @@ class MessageService {
   AcceptedText AcceptText(TcpPacket request);
   AcceptedGroupText AcceptGroupText(TcpPacket request);
 
-  AckResult Ack(TcpPacket &request);
+  AckResult Ack(TcpPacket &request, const std::string &deviceId);
   TcpPacket SendText(uint32_t msgID, TcpPacket &request);
   TcpPacket SendFile(uint32_t msgID, TcpPacket &request);
   TcpPacket SendGroupText(uint32_t msgID, TcpPacket &request);
-  TcpPacket PullSessionMessages(uint32_t msgID, TcpPacket &request);
+  TcpPacket PullConversationMessages(uint32_t msgID, TcpPacket &request);
 };
 
 }  // namespace wimi

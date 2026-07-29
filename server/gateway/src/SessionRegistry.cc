@@ -15,13 +15,16 @@ SessionRegistry::SessionRegistry(std::string gatewayId, std::string instanceId,
       leaseTtlSeconds(leaseTtlSeconds) {}
 
 db::SessionLease SessionRegistry::Bind(
-    int64_t uid, const std::shared_ptr<GatewaySession> &session) {
+    int64_t uid, const std::string &deviceId,
+    const std::shared_ptr<GatewaySession> &session) {
   db::SessionLease lease;
+  lease.deviceId = deviceId;
   lease.gatewayId = gatewayId;
   lease.instanceId = instanceId;
   lease.connectionId = session->ConnectionId();
   lease.generation = db::RedisDao::GetInstance()->bindSessionLease(
-      uid, gatewayId, instanceId, lease.connectionId, leaseTtlSeconds);
+      uid, deviceId, gatewayId, instanceId, lease.connectionId,
+      leaseTtlSeconds);
   if (lease.generation <= 0)
     return {};
 
@@ -29,22 +32,24 @@ db::SessionLease SessionRegistry::Bind(
   std::shared_ptr<GatewaySession> oldSession;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    auto found = sessions.find(uid);
-    if (found != sessions.end())
+    auto &userSessions = sessions[uid];
+    auto found = userSessions.find(deviceId);
+    if (found != userSessions.end())
       oldSession = found->second.session.lock();
-    sessions[uid] = LocalSession{session, lease};
+    userSessions[deviceId] = LocalSession{session, lease};
   }
   if (oldSession && oldSession != session)
     oldSession->Close();
   return lease;
 }
 
-bool SessionRegistry::Refresh(int64_t uid, const db::SessionLease &lease) {
-  return db::RedisDao::GetInstance()->refreshSessionLease(uid, lease,
+bool SessionRegistry::Refresh(int64_t uid, const std::string &deviceId,
+                              const db::SessionLease &lease) {
+  return db::RedisDao::GetInstance()->refreshSessionLease(uid, deviceId, lease,
                                                           leaseTtlSeconds);
 }
 
-void SessionRegistry::Remove(int64_t uid,
+void SessionRegistry::Remove(int64_t uid, const std::string &deviceId,
                              const std::shared_ptr<GatewaySession> &session,
                              const db::SessionLease &lease) {
   {
@@ -52,12 +57,17 @@ void SessionRegistry::Remove(int64_t uid,
     auto found = sessions.find(uid);
     if (found == sessions.end())
       return;
-    auto current = found->second.session.lock();
+    auto device = found->second.find(deviceId);
+    if (device == found->second.end())
+      return;
+    auto current = device->second.session.lock();
     if (current && current != session)
       return;
-    sessions.erase(found);
+    found->second.erase(device);
+    if (found->second.empty())
+      sessions.erase(found);
   }
-  db::RedisDao::GetInstance()->clearSessionLease(uid, lease);
+  db::RedisDao::GetInstance()->clearSessionLease(uid, deviceId, lease);
 }
 
 gateway::ClientForwardStatus SessionRegistry::Forward(
@@ -66,8 +76,11 @@ gateway::ClientForwardStatus SessionRegistry::Forward(
   db::SessionLease lease;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    auto found = sessions.find(forward.recipient_uid());
-    if (found == sessions.end())
+    auto user = sessions.find(forward.recipient_uid());
+    if (user == sessions.end())
+      return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
+    auto found = user->second.find(forward.recipient_device_id());
+    if (found == user->second.end())
       return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
     session = found->second.session.lock();
     lease = found->second.lease;

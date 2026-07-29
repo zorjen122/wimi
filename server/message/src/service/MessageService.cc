@@ -19,8 +19,8 @@ MessageService::AcceptedText MessageService::AcceptText(TcpPacket request) {
   const std::string clientMessageId = request.client_message_id();
 
   result.response.set_client_message_id(clientMessageId);
-  if (from <= 0 || to <= 0 || data.empty() || !request.has_client_message_id() ||
-      clientMessageId.empty()) {
+  if (from <= 0 || to <= 0 || data.empty() ||
+      !request.has_client_message_id() || clientMessageId.empty()) {
     result.response.set_error(ErrorCodes::JsonParser);
     result.response.set_message(
         "actor, to, data and client_message_id are required");
@@ -68,17 +68,17 @@ MessageService::AcceptedGroupText MessageService::AcceptGroupText(
     TcpPacket request) {
   AcceptedGroupText result;
   const int64_t sender = request.uid();
-  const int64_t groupId = request.gid();
+  const int64_t groupId = request.group_id();
   const std::string content = request.data();
   const std::string clientMessageId = request.client_message_id();
 
   result.response.set_client_message_id(clientMessageId);
-  result.response.set_gid(groupId);
+  result.response.set_group_id(groupId);
   if (sender <= 0 || groupId <= 0 || content.empty() ||
       !request.has_client_message_id() || clientMessageId.empty()) {
     result.response.set_error(ErrorCodes::JsonParser);
     result.response.set_message(
-        "actor, gid, data and client_message_id are required");
+        "actor, group_id, data and client_message_id are required");
     result.response.set_retryable(false);
     return result;
   }
@@ -105,7 +105,7 @@ MessageService::AcceptedGroupText MessageService::AcceptGroupText(
   result.response.set_retryable(false);
 
   request.set_from(sender);
-  request.set_gid(groupId);
+  request.set_group_id(groupId);
   request.set_seq(accepted.messageId);
   request.set_message_id(accepted.messageId);
   request.set_client_message_id(clientMessageId);
@@ -119,7 +119,8 @@ MessageService::AcceptedGroupText MessageService::AcceptGroupText(
   return result;
 }
 
-MessageService::AckResult MessageService::Ack(TcpPacket &request) {
+MessageService::AckResult MessageService::Ack(TcpPacket &request,
+                                              const std::string &deviceId) {
   AckResult result;
   auto &rsp = result.response;
   int64_t seq = request.seq();
@@ -128,9 +129,9 @@ MessageService::AckResult MessageService::Ack(TcpPacket &request) {
     rsp.set_error(ErrorCodes::JsonParser);
     return result;
   }
-  if (!request.has_receipt_type() ||
-      !request.has_conversation_id() || !request.has_conversation_seq() ||
-      request.conversation_id() <= 0 || request.conversation_seq() <= 0) {
+  if (!request.has_receipt_type() || !request.has_conversation_id() ||
+      !request.has_conversation_seq() || request.conversation_id() <= 0 ||
+      request.conversation_seq() <= 0) {
     rsp.set_error(ErrorCodes::JsonParser);
     return result;
   }
@@ -149,8 +150,8 @@ MessageService::AckResult MessageService::Ack(TcpPacket &request) {
 
   const auto acknowledged =
       db::MysqlDao::GetInstance()->acknowledgeConversationMessage(
-          seq, uid, request.conversation_id(), request.conversation_seq(),
-          status, readTime);
+          seq, uid, deviceId, request.conversation_id(),
+          request.conversation_seq(), status, readTime);
   if (acknowledged.updated <= 0) {
     LOG_WARN(wimi::businessLogger,
              "ACK所有权校验失败或消息不存在, seq: {}, principal: {}", seq, uid);
@@ -203,8 +204,8 @@ TcpPacket MessageService::SendText(uint32_t msgID, TcpPacket &request) {
   return accepted.response;
 }
 
-TcpPacket MessageService::PullSessionMessages(uint32_t msgID,
-                                              TcpPacket &request) {
+TcpPacket MessageService::PullConversationMessages(uint32_t msgID,
+                                                   TcpPacket &request) {
   TcpPacket rsp;
 
   if (!request.has_conversation_id() || request.conversation_id() <= 0) {

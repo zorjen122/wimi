@@ -29,6 +29,7 @@ message CommandEnvelope {
   int64 conversation_id = 6;         // 会话 ID；无会话命令为 0
   int64 deadline_unix_ms = 7;        // 命令绝对截止时间，Unix 毫秒
   bytes packet = 8;                  // 序列化后的 protocol.Packet
+  string actor_device_id = 9;        // 已由 Gateway 鉴权的设备 ID
 }
 
 // Message Core 返回给入口 Gateway 的业务处理结果。
@@ -51,6 +52,7 @@ message ClientForwardEnvelope {
   int64 conversation_id = 7;           // 所属会话 ID；非会话通知可为 0
   int64 conversation_seq = 8;          // 会话内严格递增序号
   bytes packet = 9;                     // 序列化后的推送 protocol.Packet
+  string recipient_device_id = 10;      // 目标设备 ID
 }
 
 enum ClientForwardStatus {
@@ -67,6 +69,7 @@ message ClientForwardAck {
   ClientForwardStatus status = 2;   // Gateway 本地转发结果
   string gateway_id = 3;            // 返回 ACK 的 Gateway 节点 ID
   string instance_id = 4;           // 返回 ACK 的 Gateway 进程实例 UUID
+  string recipient_device_id = 5;   // 实际处理转发的目标设备 ID
 }
 
 // Gateway 定期发送的流级心跳。

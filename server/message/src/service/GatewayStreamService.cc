@@ -165,7 +165,8 @@ class GatewayStreamReactor final
     const std::string originGatewayId = gatewayId;
     const std::string originInstanceId = instanceId;
     auto accepted = Service::GetInstance()->PostBackgroundTask(
-        [this, originGatewayId, originInstanceId, command = std::move(command)]() mutable {
+        [this, originGatewayId, originInstanceId,
+         command = std::move(command)]() mutable {
           HandleBackgroundCommand(originGatewayId, originInstanceId,
                                   std::move(command));
         });
@@ -225,8 +226,8 @@ class GatewayStreamReactor final
     // 传来的身份完全一致
     // 除了保证连接本身的一致性，也是防旧连接、旧登录、伪造连接继续发命令。
     // 用户重新登录后，旧连接 generation 不匹配，Message 端会拒绝。
-    auto actorLease =
-        db::RedisDao::GetInstance()->getSessionLease(command.actor_uid());
+    auto actorLease = db::RedisDao::GetInstance()->getSessionLease(
+        command.actor_uid(), command.actor_device_id());
     if (actorLease.empty() || actorLease.gatewayId != originGatewayId ||
         actorLease.instanceId != originInstanceId ||
         actorLease.connectionId != command.connection_id() ||
@@ -245,7 +246,8 @@ class GatewayStreamReactor final
     packet.set_uid(command.actor_uid());
 
     if (command.service_id() == ID_ACK) {
-      auto ack = Service::GetInstance()->Messages().Ack(packet);
+      auto ack = Service::GetInstance()->Messages().Ack(
+          packet, command.actor_device_id());
       const auto error = TcpPacketError(ack.response);
       reply(error, isRetryableError(error), {}, ack.response);
 
@@ -284,8 +286,12 @@ class GatewayStreamReactor final
         forward.set_conversation_id(acceptedText.response.conversation_id());
         forward.set_conversation_seq(acceptedText.response.conversation_seq());
         forward.set_packet(SerializeTcpPacket(acceptedText.forwardPacket));
-        streamService->ForwardToUser(acceptedText.recipientUid,
-                                     std::move(forward));
+        streamService->ForwardToUser(acceptedText.recipientUid, forward);
+        forward.set_forward_id(
+            std::to_string(acceptedText.response.message_id()) + ":" +
+            std::to_string(command.actor_uid()));
+        streamService->ForwardToUser(command.actor_uid(), std::move(forward),
+                                     command.actor_device_id());
       }
       return;
     }
@@ -312,6 +318,22 @@ class GatewayStreamReactor final
           forward.set_packet(SerializeTcpPacket(acceptedText.forwardPacket));
           streamService->ForwardToUser(recipientUid, std::move(forward));
         }
+        gateway::ClientForwardEnvelope senderForward;
+        senderForward.set_forward_id(
+            std::to_string(acceptedText.response.message_id()) + ":" +
+            std::to_string(command.actor_uid()));
+        senderForward.set_recipient_uid(command.actor_uid());
+        senderForward.set_protocol_id(ID_GROUP_TEXT_SEND_REQ);
+        senderForward.set_message_id(acceptedText.response.message_id());
+        senderForward.set_conversation_id(
+            acceptedText.response.conversation_id());
+        senderForward.set_conversation_seq(
+            acceptedText.response.conversation_seq());
+        senderForward.set_packet(
+            SerializeTcpPacket(acceptedText.forwardPacket));
+        streamService->ForwardToUser(command.actor_uid(),
+                                     std::move(senderForward),
+                                     command.actor_device_id());
       }
       return;
     }
@@ -393,25 +415,37 @@ bool GatewayStreamService::Forward(const db::SessionLease &lease,
 }
 
 bool GatewayStreamService::ForwardToUser(
-    int64_t recipientUid, gateway::ClientForwardEnvelope envelope) {
-  auto lease = db::RedisDao::GetInstance()->getSessionLease(recipientUid);
-  if (lease.empty())
-    return false;
-  envelope.set_recipient_uid(recipientUid);
-  envelope.set_expected_connection_id(lease.connectionId);
-  envelope.set_expected_connection_generation(lease.generation);
-  if (Forward(lease, envelope))
-    return true;
+    int64_t recipientUid, gateway::ClientForwardEnvelope envelope,
+    const std::string &excludedDeviceId) {
+  bool forwarded = false;
+  auto leases = db::RedisDao::GetInstance()->getSessionLeases(recipientUid);
+  for (const auto &lease : leases) {
+    if (lease.deviceId == excludedDeviceId)
+      continue;
+    auto target = envelope;
+    target.set_forward_id(envelope.forward_id() + ":" + lease.deviceId);
+    target.set_recipient_uid(recipientUid);
+    target.set_recipient_device_id(lease.deviceId);
+    target.set_expected_connection_id(lease.connectionId);
+    target.set_expected_connection_generation(lease.generation);
+    if (Forward(lease, target)) {
+      forwarded = true;
+      continue;
+    }
 
-  auto refreshed = db::RedisDao::GetInstance()->getSessionLease(recipientUid);
-  if (refreshed.empty() || (refreshed.gatewayId == lease.gatewayId &&
-                            refreshed.instanceId == lease.instanceId &&
-                            refreshed.connectionId == lease.connectionId &&
-                            refreshed.generation == lease.generation))
-    return false;
-  envelope.set_expected_connection_id(refreshed.connectionId);
-  envelope.set_expected_connection_generation(refreshed.generation);
-  return Forward(refreshed, std::move(envelope));
+    auto refreshed = db::RedisDao::GetInstance()->getSessionLease(
+        recipientUid, lease.deviceId);
+    if (refreshed.empty() || (refreshed.gatewayId == lease.gatewayId &&
+                              refreshed.instanceId == lease.instanceId &&
+                              refreshed.connectionId == lease.connectionId &&
+                              refreshed.generation == lease.generation))
+      continue;
+    target.set_expected_connection_id(refreshed.connectionId);
+    target.set_expected_connection_generation(refreshed.generation);
+    if (Forward(refreshed, std::move(target)))
+      forwarded = true;
+  }
+  return forwarded;
 }
 
 bool GatewayStreamService::Reply(const std::string &gatewayId,

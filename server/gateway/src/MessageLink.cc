@@ -626,17 +626,19 @@ void MessageLinkManager::OnFrame(const std::string &nodeId,
   }
 
   // ClientForward 先交给本地 SessionRegistry 做 generation 校验和物理推送，再沿
-  // 原流返回 ClientForwardAck；业务消息已持久化，因此离线/背压不会回滚 ACCEPTED。
+  // 原流返回 ClientForwardAck；业务消息已持久化，因此离线/背压不会回滚
+  // ACCEPTED。
   if (frame.has_client_forward()) {
-    LOG_DEBUG(businessLogger,
-              "Gateway handling Message client forward, node: {}, forward_id: {}, "
-              "recipient_uid: {}, message_id: {}, conversation_id: {}, "
-              "conversation_seq: {}",
-              nodeId, frame.client_forward().forward_id(),
-              frame.client_forward().recipient_uid(),
-              frame.client_forward().message_id(),
-              frame.client_forward().conversation_id(),
-              frame.client_forward().conversation_seq());
+    LOG_DEBUG(
+        businessLogger,
+        "Gateway handling Message client forward, node: {}, forward_id: {}, "
+        "recipient_uid: {}, message_id: {}, conversation_id: {}, "
+        "conversation_seq: {}",
+        nodeId, frame.client_forward().forward_id(),
+        frame.client_forward().recipient_uid(),
+        frame.client_forward().message_id(),
+        frame.client_forward().conversation_id(),
+        frame.client_forward().conversation_seq());
     gateway::ClientForwardStatus status =
         gateway::CLIENT_FORWARD_STATUS_OFFLINE;
     if (clientForwardHandler) {
@@ -661,6 +663,8 @@ void MessageLinkManager::OnFrame(const std::string &nodeId,
       ack->set_status(status);
       ack->set_gateway_id(gatewayId);
       ack->set_instance_id(instanceId);
+      ack->set_recipient_device_id(
+          frame.client_forward().recipient_device_id());
       if (!link->Enqueue(std::move(ackFrame))) {
         LOG_WARN(netLogger,
                  "Gateway failed to enqueue client-forward ACK, node: {}, "
@@ -668,18 +672,20 @@ void MessageLinkManager::OnFrame(const std::string &nodeId,
                  nodeId, frame.client_forward().forward_id(),
                  static_cast<int>(status));
       } else {
-        LOG_DEBUG(businessLogger,
-                  "Gateway enqueued client-forward ACK, node: {}, forward_id: {}, "
-                  "status: {}",
-                  nodeId, frame.client_forward().forward_id(),
-                  static_cast<int>(status));
+        LOG_DEBUG(
+            businessLogger,
+            "Gateway enqueued client-forward ACK, node: {}, forward_id: {}, "
+            "status: {}",
+            nodeId, frame.client_forward().forward_id(),
+            static_cast<int>(status));
       }
     } else {
-      LOG_WARN(netLogger,
-               "Gateway cannot return client-forward ACK because link is absent, "
-               "node: {}, forward_id: {}, status: {}",
-               nodeId, frame.client_forward().forward_id(),
-               static_cast<int>(status));
+      LOG_WARN(
+          netLogger,
+          "Gateway cannot return client-forward ACK because link is absent, "
+          "node: {}, forward_id: {}, status: {}",
+          nodeId, frame.client_forward().forward_id(),
+          static_cast<int>(status));
     }
     return;
   }

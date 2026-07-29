@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 作用：
 #   验证关系类和拉取类接口的基础行为。
-#   会创建临时用户，覆盖好友申请/同意、好友列表拉取、会话/用户消息拉取、
+#   会创建临时用户，覆盖好友申请/同意、好友列表拉取、
 #   群创建、入群申请和入群同意，并用 MySQL 结果做校验。
 # 前置条件：
 #   已初始化 MySQL，并启动本地服务；默认连接 Connection Gateway 127.0.0.1:8090。
@@ -184,15 +184,18 @@ def check_friend_reply_and_pulls(client):
 def create_group(client):
     rsp = client.request(ID_GROUP_CREATE_REQ, {"uid": UID_A, "groupName": GROUP_NAME})
     require(rsp.get("error") == 0, f"group create failed: {rsp}")
-    gid = int(rsp.get("gid", 0))
+    gid = int(rsp.get("groupId", 0))
     require(gid > 0, f"group create did not return gid: {rsp}")
+    conversation_id = int(rsp.get("conversationId", 0))
+    require(conversation_id > 0,
+            f"group create did not return conversation id: {rsp}")
     return gid
 
 
 def join_group(client, gid):
     rsp = client.request(
         ID_GROUP_NOTIFY_JOIN_REQ,
-        {"uid": UID_B, "gid": gid, "requestMessage": JOIN_MSG},
+        {"uid": UID_B, "groupId": gid, "requestMessage": JOIN_MSG},
     )
     require(rsp.get("error") == 0, f"group join notify failed: {rsp}")
 
@@ -200,7 +203,7 @@ def join_group(client, gid):
 def approve_group_join(client, gid):
     rsp = client.request(
         ID_GROUP_REPLY_JOIN_REQ,
-        {"gid": gid, "managerUid": UID_A, "requestorUid": UID_B, "accept": True},
+        {"groupId": gid, "managerUid": UID_A, "requestorUid": UID_B, "accept": True},
     )
     require(rsp.get("error") == 0, f"group join reply failed: {rsp}")
 
@@ -234,26 +237,26 @@ expect_count \
 expect_count \
   "friend relation rows" \
   "SELECT COUNT(*) FROM friends WHERE (uidA = $uid_a AND uidB = $uid_b) OR (uidA = $uid_b AND uidB = $uid_a);" \
-  "2"
+  "1"
 
 expect_count \
-  "message fixture row" \
-  "SELECT COUNT(*) FROM messages WHERE messageId = $message_id AND senderId = $uid_a AND receiverId = $uid_b AND content = '$pull_payload';" \
+  "friend conversation mapping" \
+  "SELECT COUNT(*) FROM friends f INNER JOIN conversations c ON c.type = 1 AND c.businessId = f.friendshipId WHERE f.uidA = LEAST($uid_a, $uid_b) AND f.uidB = GREATEST($uid_a, $uid_b);" \
   "1"
 
 expect_count \
   "group row" \
-  "SELECT COUNT(*) FROM groupInfo WHERE gid = $group_gid AND name = '$group_name';" \
+  "SELECT COUNT(*) FROM groupInfo WHERE groupId = $group_gid AND name = '$group_name';" \
   "1"
 
 expect_count \
   "group member rows" \
-  "SELECT COUNT(*) FROM groupMembers WHERE gid = $group_gid AND uid IN ($uid_a, $uid_b);" \
+  "SELECT COUNT(*) FROM groupMembers WHERE groupId = $group_gid AND uid IN ($uid_a, $uid_b);" \
   "2"
 
 expect_count \
   "group apply accepted row" \
-  "SELECT COUNT(*) FROM groupApplys WHERE gid = $group_gid AND requestor = $uid_b AND handler = $uid_a AND status = 1;" \
+  "SELECT COUNT(*) FROM groupApplys WHERE groupId = $group_gid AND requestor = $uid_b AND handler = $uid_a AND status = 1;" \
   "1"
 
 echo "relationship smoke ok"

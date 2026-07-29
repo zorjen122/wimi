@@ -46,8 +46,8 @@ TcpPacket FriendService::NotifyAddFriend(unsigned int msgID,
 
   TcpPacket senderRsp = request;
   senderRsp.set_seq(db::RedisDao::GetInstance()->generateMsgId());
-  if (clientForwardService.ForwardToGateway(
-          to, SerializeTcpPacket(senderRsp), ID_NOTIFY_ADD_FRIEND_REQ)) {
+  if (clientForwardService.ForwardToGateway(to, SerializeTcpPacket(senderRsp),
+                                            ID_NOTIFY_ADD_FRIEND_REQ)) {
     rsp.set_error(ErrorCodes::Success);
     return rsp;
   }
@@ -88,8 +88,8 @@ TcpPacket FriendService::ReplyAddFriend(unsigned int msgID,
   senderRsp.set_accept(accept);
   senderRsp.set_reply_message(replyMessage);
   senderRsp.set_seq(db::RedisDao::GetInstance()->generateMsgId());
-  if (clientForwardService.ForwardToGateway(
-          to, SerializeTcpPacket(senderRsp), ID_REPLY_ADD_FRIEND_REQ)) {
+  if (clientForwardService.ForwardToGateway(to, SerializeTcpPacket(senderRsp),
+                                            ID_REPLY_ADD_FRIEND_REQ)) {
     rsp.set_error(ErrorCodes::Success);
     return rsp;
   }
@@ -111,12 +111,15 @@ int FriendService::StoreReplyAddFriend(TcpPacket &request) {
   int rt = -1;
   db::FriendApply::Status status{};
   std::string time = getCurrentDateTime();
-  long sessionId{};
+  long friendshipId{};
+  long conversationId{};
   if (accept) {
     LOG_INFO(businessLogger, "accept friend request, from {}, to {}", from, to);
     status = db::FriendApply::Status::Agree;
-    sessionId = db::RedisDao::GetInstance()->generateSessionId();
-    db::Friend::Ptr friendData(new db::Friend(from, to, time, sessionId));
+    friendshipId = db::RedisDao::GetInstance()->generateFriendshipId();
+    conversationId = db::RedisDao::GetInstance()->generateConversationId();
+    db::Friend::Ptr friendData(
+        new db::Friend(friendshipId, conversationId, from, to, time));
 
     rt = db::MysqlDao::GetInstance()->insertFriend(friendData);
     if (rt == -1) {
@@ -137,7 +140,7 @@ int FriendService::StoreReplyAddFriend(TcpPacket &request) {
               to);
   }
   // 暂用
-  return rt == -1 ? -1 : sessionId;
+  return rt == -1 ? -1 : friendshipId;
 }
 
 TcpPacket FriendService::PullFriendApplyList(uint32_t msgID,

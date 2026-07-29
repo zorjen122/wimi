@@ -47,18 +47,19 @@ struct Friend {
   using Ptr = std::shared_ptr<Friend>;
   using FriendGroup = std::shared_ptr<std::vector<Friend::Ptr>>;
   Friend() = default;
-  Friend(size_t uidA, size_t uidB, std::string createTime, size_t sessionId)
-      : uidA(uidA),
+  Friend(size_t friendshipId, size_t conversationId, size_t uidA, size_t uidB,
+         std::string createTime)
+      : friendshipId(friendshipId),
+        conversationId(conversationId),
+        uidA(uidA),
         uidB(uidB),
-        createTime(std::move(createTime)),
-        sessionId(sessionId) {}
+        createTime(std::move(createTime)) {}
 
+  size_t friendshipId;
+  size_t conversationId;
   size_t uidA;
   size_t uidB;
   std::string createTime;
-
-  // 更改为sessionId，消息服务器Id可在哈希中获取，此举是动态的
-  size_t sessionId;
 };
 
 struct FriendApply {
@@ -113,13 +114,14 @@ struct Message {
     READ = 3,
   };
   Message() = default;
-  Message(long messageId, long fromUid, long toUid, std::string sessionKey,
-          short type, std::string content, short status,
+  Message(long messageId, long fromUid, long toUid, long conversationId,
+          long conversationSeq, short type, std::string content, short status,
           std::string sendDateTime = "", std::string readDateTime = "")
       : messageId(messageId),
         from(fromUid),
         to(toUid),
-        sessionKey(std::move(sessionKey)),
+        conversationId(conversationId),
+        conversationSeq(conversationSeq),
         type(type),
         content(std::move(content)),
         status(status),
@@ -159,7 +161,8 @@ struct Message {
   long messageId;
   long from;
   long to;
-  std::string sessionKey;
+  long conversationId;
+  long conversationSeq;
   short type;
   std::string content;
   short status;
@@ -172,11 +175,14 @@ struct Message {
 struct GroupManager {
   using Ptr = std::shared_ptr<GroupManager>;
   GroupManager() = default;
-  GroupManager(long gid, long sessionKey, std::string name,
+  GroupManager(long groupId, long conversationId, std::string name,
                std::string createTime = "")
-      : gid(gid), sessionKey(sessionKey), name(name), createTime(createTime) {}
-  long gid;
-  long sessionKey;
+      : groupId(groupId),
+        conversationId(conversationId),
+        name(name),
+        createTime(createTime) {}
+  long groupId;
+  long conversationId;
   std::string name;
   std::string createTime;
 };
@@ -188,15 +194,15 @@ struct GroupMember {
   enum Role { Member, Manager, Master };
   enum Speech { NORMAL, BAN };
   GroupMember() = default;
-  GroupMember(long gid, long uid, short role, std::string joinTime = "",
+  GroupMember(long groupId, long uid, short role, std::string joinTime = "",
               short speech = 0, std::string memberName = "")
-      : gid(gid),
+      : groupId(groupId),
         uid(uid),
         role(role),
         joinTime(std::move(joinTime)),
         speech(speech),
         memberName(std::move(memberName)) {}
-  long gid;
+  long groupId;
   long uid;
   short role;
   std::string joinTime;
@@ -226,11 +232,11 @@ struct File {
 struct GroupApply {
   using Ptr = std::shared_ptr<GroupApply>;
   using GroupApplyList = std::shared_ptr<std::vector<GroupApply::Ptr>>;
-  GroupApply(long requestor, long handler, long gid, short type, short status,
-             std::string message, std::string updateTime)
+  GroupApply(long requestor, long handler, long groupId, short type,
+             short status, std::string message, std::string updateTime)
       : requestor(requestor),
         handler(handler),
-        gid(gid),
+        groupId(groupId),
         type(type),
         status(status),
         message(message),
@@ -250,7 +256,7 @@ struct GroupApply {
 
   long requestor;
   long handler;
-  long gid;
+  long groupId;
   short type;
   short status;
   std::string message;

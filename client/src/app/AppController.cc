@@ -870,21 +870,24 @@ void AppController::HandleGatewayResponse(const QString &requestId,
 
   if (serviceId == protocol::CreateGroupResponse) {
     const QString groupName = create_group_requests_.take(requestId);
-    if (errorCode != protocol::Success || !response.hasGid()) {
+    if (errorCode != protocol::Success || !response.hasGroupId()) {
       SetServiceActionStatus(response.hasMessage()
                                  ? response.message()
                                  : tr("创建群失败（%1）").arg(errorCode));
       return;
     }
     const QString localConversationId = EnsureGroupConversation(
-        response.gid(),
+        response.groupId(),
         groupName.isEmpty()
-            ? tr("群聊 %1").arg(static_cast<qint64>(response.gid()))
+            ? tr("群聊 %1").arg(static_cast<qint64>(response.groupId()))
             : groupName);
+    if (response.hasConversationId()) {
+      AttachRemoteConversation(localConversationId, response.conversationId());
+    }
     setCurrentSection(QStringLiteral("chats"));
     selectConversation(conversations_.IndexOf(localConversationId));
-    SetServiceActionStatus(
-        tr("群聊已创建，群 ID：%1").arg(static_cast<qint64>(response.gid())));
+    SetServiceActionStatus(tr("群聊已创建，群 ID：%1")
+                               .arg(static_cast<qint64>(response.groupId())));
     return;
   }
 
@@ -930,12 +933,29 @@ void AppController::HandleGatewayResponse(const QString &requestId,
     if (localConversationId.isEmpty()) {
       return;
     }
-    repository_->AcceptOutgoing(clientMessageId, response.messageId(),
-                                localConversationId,
-                                response.conversationSeq());
+    if (!repository_->AcceptOutgoing(clientMessageId, response.messageId(),
+                                     localConversationId,
+                                     response.conversationSeq())) {
+      SetServiceActionStatus(tr("发送消息写入本地数据库失败"));
+      return;
+    }
     messages_.UpdateDeliveryState(clientMessageId,
                                   MessageDeliveryState::Accepted);
     AttachRemoteConversation(localConversationId, response.conversationId());
+    const std::int64_t cursor = repository_->SyncCursor(localConversationId);
+    if (response.conversationSeq() == cursor + 1 &&
+        repository_->ApplyIncomingBatch(localConversationId, {},
+                                        response.conversationSeq())) {
+      gateway_client_.AcknowledgeDelivered(response.messageId(),
+                                           response.conversationId(),
+                                           response.conversationSeq());
+      DrainPendingPush(localConversationId);
+    } else if (response.conversationSeq() > cursor + 1) {
+      const QString syncRequest = gateway_client_.PullConversationMessages(
+          response.conversationId(), cursor);
+      sync_request_conversations_.insert(syncRequest, localConversationId);
+      gap_syncing_.insert(localConversationId);
+    }
     return;
   }
 
@@ -1007,6 +1027,10 @@ void AppController::HandleGatewayResponse(const QString &requestId,
     const QString localConversationId =
         sync_request_conversations_.take(requestId);
     if (localConversationId.isEmpty() || errorCode != protocol::Success) {
+      if (!localConversationId.isEmpty()) {
+        gap_syncing_.remove(localConversationId);
+        ScheduleGapSync(localConversationId);
+      }
       if (errorCode != protocol::Success) {
         SetServiceActionStatus(tr("同步会话失败（%1）").arg(errorCode));
       }
@@ -1023,11 +1047,11 @@ void AppController::HandleGatewayResponse(const QString &requestId,
                        });
       if (duplicate != stored.cend()) {
         if (item.from() == authenticated_uid_) {
-          UpdateMessageState(
-              duplicate->clientMessageId,
-              item.status() >= 3   ? MessageDeliveryState::Read
-              : item.status() >= 2 ? MessageDeliveryState::Delivered
-                                   : MessageDeliveryState::Accepted);
+          UpdateMessageState(duplicate->clientMessageId,
+                             item.status() >= 3 ? MessageDeliveryState::Read
+                             : item.status() >= 2
+                                 ? MessageDeliveryState::Delivered
+                                 : MessageDeliveryState::Accepted);
         }
         continue;
       }
@@ -1055,12 +1079,18 @@ void AppController::HandleGatewayResponse(const QString &requestId,
     }
     for (const auto &message : additions) {
       stored.push_back(message);
-      if (!message.outgoing && message.messageId.has_value() &&
-          message.conversationSeq.has_value()) {
-        gateway_client_.AcknowledgeDelivered(*message.messageId,
-                                             response.conversationId(),
-                                             *message.conversationSeq);
-      }
+    }
+    std::stable_sort(stored.begin(), stored.end(),
+                     [](const MessageRecord &left, const MessageRecord &right) {
+                       if (!left.conversationSeq.has_value())
+                         return false;
+                       if (!right.conversationSeq.has_value())
+                         return true;
+                       return *left.conversationSeq < *right.conversationSeq;
+                     });
+    for (const auto &item : response.messageList()) {
+      gateway_client_.AcknowledgeDelivered(
+          item.messageId(), response.conversationId(), item.conversationSeq());
     }
     if (CurrentConversationId() == localConversationId) {
       messages_.SetRecords(stored);
@@ -1070,6 +1100,9 @@ void AppController::HandleGatewayResponse(const QString &requestId,
       const QString nextRequest = gateway_client_.PullConversationMessages(
           response.conversationId(), response.nextSeq());
       sync_request_conversations_.insert(nextRequest, localConversationId);
+    } else {
+      gap_syncing_.remove(localConversationId);
+      DrainPendingPush(localConversationId);
     }
     return;
   }
@@ -1099,6 +1132,69 @@ void AppController::HandleGatewayResponse(const QString &requestId,
                              : tr("服务请求失败（%1）").arg(errorCode));
 }
 
+void AppController::ScheduleGapSync(const QString &localConversationId) {
+  QTimer *timer = gap_timers_.value(localConversationId);
+  if (timer == nullptr) {
+    timer = new QTimer(this);
+    timer->setSingleShot(true);
+    timer->setInterval(200);
+    gap_timers_.insert(localConversationId, timer);
+    connect(timer, &QTimer::timeout, this, [this, localConversationId] {
+      auto pending = pending_pushes_.find(localConversationId);
+      if (pending == pending_pushes_.end() || pending->isEmpty() ||
+          gap_syncing_.contains(localConversationId)) {
+        return;
+      }
+      const std::int64_t cursor = repository_->SyncCursor(localConversationId);
+      if (pending->firstKey() <= cursor + 1) {
+        DrainPendingPush(localConversationId);
+        return;
+      }
+      const auto conversation = std::find_if(
+          snapshot_.conversations.cbegin(), snapshot_.conversations.cend(),
+          [&localConversationId](const ConversationRecord &candidate) {
+            return candidate.conversationId == localConversationId;
+          });
+      if (conversation == snapshot_.conversations.cend() ||
+          !conversation->remoteConversationId.has_value()) {
+        return;
+      }
+      const QString requestId = gateway_client_.PullConversationMessages(
+          *conversation->remoteConversationId, cursor);
+      sync_request_conversations_.insert(requestId, localConversationId);
+      gap_syncing_.insert(localConversationId);
+    });
+  }
+  if (!timer->isActive())
+    timer->start();
+}
+
+void AppController::DrainPendingPush(const QString &localConversationId) {
+  auto pending = pending_pushes_.find(localConversationId);
+  if (pending == pending_pushes_.end() || pending->isEmpty())
+    return;
+  const std::int64_t cursor = repository_->SyncCursor(localConversationId);
+  while (!pending->isEmpty() && pending->firstKey() <= cursor) {
+    pending->erase(pending->begin());
+  }
+  if (pending->isEmpty()) {
+    pending_pushes_.erase(pending);
+    return;
+  }
+  const std::int64_t expected = cursor + 1;
+  auto next = pending->find(expected);
+  if (next == pending->end()) {
+    ScheduleGapSync(localConversationId);
+    return;
+  }
+  const auto frame = next.value();
+  pending->erase(next);
+  if (pending->isEmpty())
+    pending_pushes_.erase(pending);
+  QTimer::singleShot(
+      0, this, [this, frame] { HandleGatewayPush(frame.first, frame.second); });
+}
+
 void AppController::HandleGatewayPush(quint32 serviceId,
                                       const QByteArray &payload) {
   wimi::protocol::Packet packet;
@@ -1114,10 +1210,11 @@ void AppController::HandleGatewayPush(quint32 serviceId,
     }
     const auto messageId = static_cast<std::int64_t>(packet.messageId());
     for (const auto &stored : snapshot_.messagesByConversation) {
-      const auto message = std::find_if(
-          stored.cbegin(), stored.cend(), [messageId](const MessageRecord &item) {
-            return item.outgoing && item.messageId == messageId;
-          });
+      const auto message =
+          std::find_if(stored.cbegin(), stored.cend(),
+                       [messageId](const MessageRecord &item) {
+                         return item.outgoing && item.messageId == messageId;
+                       });
       if (message == stored.cend()) {
         continue;
       }
@@ -1131,21 +1228,42 @@ void AppController::HandleGatewayPush(quint32 serviceId,
   if (serviceId == protocol::SendTextRequest ||
       serviceId == protocol::SendGroupTextRequest) {
     const bool group = serviceId == protocol::SendGroupTextRequest;
+    const std::int64_t directPeer =
+        packet.from() == authenticated_uid_ ? packet.to() : packet.from();
     const QString localConversationId =
-        group ? GroupConversationId(packet.gid())
+        group ? GroupConversationId(packet.groupId())
               : EnsureDirectConversation(
-                    packet.from(),
-                    tr("用户 %1").arg(static_cast<qint64>(packet.from())),
+                    directPeer,
+                    tr("用户 %1").arg(static_cast<qint64>(directPeer)),
                     QStringLiteral("#315FD6"));
     if (group && conversations_.IndexOf(localConversationId) < 0) {
       EnsureGroupConversation(
-          packet.gid(), tr("群聊 %1").arg(static_cast<qint64>(packet.gid())));
+          packet.groupId(),
+          tr("群聊 %1").arg(static_cast<qint64>(packet.groupId())));
     }
     if (packet.hasConversationId()) {
       AttachRemoteConversation(localConversationId, packet.conversationId());
     }
+    if (!packet.hasConversationId() || !packet.hasConversationSeq()) {
+      SetServiceActionStatus(tr("收到缺少会话序号的消息"));
+      return;
+    }
     const std::int64_t messageId =
         packet.hasMessageId() ? packet.messageId() : packet.seq();
+    const std::int64_t conversationSeq = packet.conversationSeq();
+    const std::int64_t cursor = repository_->SyncCursor(localConversationId);
+    if (conversationSeq > cursor + 1) {
+      pending_pushes_[localConversationId].insert(
+          conversationSeq, qMakePair(serviceId, payload));
+      ScheduleGapSync(localConversationId);
+      return;
+    }
+    if (conversationSeq <= cursor) {
+      gateway_client_.AcknowledgeDelivered(messageId, packet.conversationId(),
+                                           packet.conversationSeq());
+      DrainPendingPush(localConversationId);
+      return;
+    }
     auto &stored = snapshot_.messagesByConversation[localConversationId];
     const bool duplicate =
         std::any_of(stored.cbegin(), stored.cend(),
@@ -1153,6 +1271,11 @@ void AppController::HandleGatewayPush(quint32 serviceId,
                       return message.messageId == messageId;
                     });
     if (duplicate) {
+      if (!repository_->ApplyIncomingBatch(localConversationId, {},
+                                           conversationSeq)) {
+        SetServiceActionStatus(tr("消息游标写入本地数据库失败"));
+        return;
+      }
       gateway_client_.AcknowledgeDelivered(
           messageId,
           packet.hasConversationId()
@@ -1161,6 +1284,7 @@ void AppController::HandleGatewayPush(quint32 serviceId,
           packet.hasConversationSeq()
               ? static_cast<std::int64_t>(packet.conversationSeq())
               : 0);
+      DrainPendingPush(localConversationId);
       return;
     }
     MessageRecord incoming{
@@ -1175,13 +1299,13 @@ void AppController::HandleGatewayPush(quint32 serviceId,
         .timestamp = PacketSendDateTimeOrEmpty(packet).isEmpty()
                          ? DisplayTimestamp(QString{})
                          : PacketSendDateTimeOrEmpty(packet),
-        .outgoing = false,
+        .outgoing = packet.from() == authenticated_uid_,
         .deliveryState = MessageDeliveryState::Delivered,
     };
-    const std::int64_t cursor = incoming.conversationSeq.value_or(
+    const std::int64_t persistedCursor = incoming.conversationSeq.value_or(
         repository_->SyncCursor(localConversationId));
     if (!repository_->ApplyIncomingBatch(localConversationId, {incoming},
-                                         cursor)) {
+                                         persistedCursor)) {
       SetServiceActionStatus(tr("推送消息写入本地数据库失败"));
       return;
     }
@@ -1219,6 +1343,7 @@ void AppController::HandleGatewayPush(quint32 serviceId,
         }
       }
     }
+    DrainPendingPush(localConversationId);
     return;
   }
 
@@ -1227,7 +1352,7 @@ void AppController::HandleGatewayPush(quint32 serviceId,
     RequestRecord request{
         .requestId = serviceId == protocol::JoinGroupRequest
                          ? QStringLiteral("group:%1:%2")
-                               .arg(static_cast<qint64>(packet.gid()))
+                               .arg(static_cast<qint64>(packet.groupId()))
                                .arg(static_cast<qint64>(packet.uid()))
                          : QString::number(packet.from()),
         .displayName = tr("用户 %1").arg(static_cast<qint64>(
@@ -1259,9 +1384,10 @@ void AppController::HandleGatewayPush(quint32 serviceId,
     gateway_client_.PullFriendList();
     gateway_client_.PullFriendApplications();
     if (serviceId == protocol::ReplyJoinGroupRequest && packet.accept() &&
-        packet.requestorUid() == authenticated_uid_ && packet.gid() > 0) {
+        packet.requestorUid() == authenticated_uid_ && packet.groupId() > 0) {
       EnsureGroupConversation(
-          packet.gid(), tr("群聊 %1").arg(static_cast<qint64>(packet.gid())));
+          packet.groupId(),
+          tr("群聊 %1").arg(static_cast<qint64>(packet.groupId())));
     }
   }
 }
@@ -1280,7 +1406,11 @@ void AppController::HandleGatewayFailure(const QString &requestId,
                            ? MessageDeliveryState::RetryableFailed
                            : MessageDeliveryState::PermanentFailed);
   }
-  sync_request_conversations_.remove(requestId);
+  const QString syncConversation = sync_request_conversations_.take(requestId);
+  if (!syncConversation.isEmpty()) {
+    gap_syncing_.remove(syncConversation);
+    ScheduleGapSync(syncConversation);
+  }
   const int encodedRequestIndex = friend_reply_requests_.take(requestId);
   if (encodedRequestIndex != 0) {
     SetRequestStatus(std::abs(encodedRequestIndex) - 1,

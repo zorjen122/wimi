@@ -42,7 +42,7 @@ Message 节点之间不再建立业务转发连接；Gateway 之间也不直接�
 | --- | --- | --- | --- |
 | S1 | C++20 server 总工程构建 | 已验证 | `server/CMakeLists.txt` 已统一 `CMAKE_CXX_STANDARD 20`，构建命令为 `cmake -S server -B build/wimi`、`cmake --build build/wwimi-j2`。 |
 | S2 | public protobuf/gRPC 生成 | 已验证 | `tcp_message.proto`、`state.proto`、`gateway_message.proto` 由 `server/public` 生成；客户端只依赖 TCP 公开协议，Gateway-Message 协议只在服务端内部使用。 |
-| S3 | MySQL 初始化 | 已验证 | `./scripts/init_mysql.sh` 初始化 `chatServ` 与测试数据；新消息模型包含 `conversations`、`conversation_members`、`messages` 的 conversation 语义。 |
+| S3 | MySQL 初始化 | 已验证 | `./scripts/init_mysql.sh` 初始化 `chatServ` 与测试数据；消息模型包含 `conversations`、`conversationUserStates`、`messages`、`devices` 和 `conversationDeviceStates`。好友使用 canonical uid pair 和 `friendshipId`，群表使用明确的 `groupId`。 |
 | S4 | 本地服务编排 | 部分验证 | `./scripts/run_local_services.sh` 启动 state/file/message/gateway/gate，并支持 `--stop-existing`。干净构建下仍有历史测试客户端产物依赖。 |
 | S5 | State 选择 Connection Gateway | 已验证 | Gate 登录调用 `PickConnectionGateway`，返回 `ip/port/gatewayId`，不再向客户端返回 Message 节点地址。 |
 | S6 | State 返回 Message 拓扑 | 部分验证 | Gateway 每 5 秒调用 `ListMessageNodes` 拉取带 `topology_version` 的 Message 节点快照；节点增删与排空故障分支仍需专项测试。 |
@@ -50,15 +50,15 @@ Message 节点之间不再建立业务转发连接；Gateway 之间也不直接�
 | S8 | 注册 | 已验证 | `/post-signUp` 校验用户名、邮箱、一次性验证码后写入 MySQL；验证码消费后不能重放。 |
 | S9 | 登录与连接 token | 已验证 | `/post-signIn` 校验账号密码，返回 Gateway 地址、`gatewayId`、`chatToken` 和 TTL；Gateway 登录时验证 Redis 中的短期 token。 |
 | S10 | 忘记密码/重置密码 | 待验证 | `/post-forget-password` 已接入邮箱归属校验、验证码消费和 MySQL 密码更新，但尚未用临时账号做完整端到端断言。 |
-| S11 | Gateway TCP 登录与 session lease | 已验证 | `ID_LOGIN_INIT_REQ` 在 Gateway 本地处理；登录成功后写入 `im:session:<uid>`，包含 `gatewayId/instanceId/connectionId/generation`。新 generation 会替换旧连接。 |
+| S11 | Gateway TCP 登录与 session lease | 已验证 | `ID_LOGIN_INIT_REQ` 在 Gateway 本地处理并登记客户端生成的 `deviceId`；登录成功后写入 `im:session:<uid>:<deviceId>`，包含 `deviceId/gatewayId/instanceId/connectionId/generation`。仅同一用户同一设备的新 generation 会替换旧连接。 |
 | S12 | Gateway 本地控制命令 | 部分验证 | `ID_PING_REQ`、`ID_USER_QUIT_REQ`、TRANSPORT ACK 在 Gateway 本地处理；ACK 重传取消和慢连接关闭仍需要更细的专项断言。 |
 | S13 | Gateway -> Message 双向 gRPC 长流 | 部分验证 | Gateway 向每个 Message 节点建立一条 `Connect` 流，首帧 `RegisterGateway`，注册成功后进入 healthy；心跳、队列串行写、指数退避重连已实现，流断开后的精确故障恢复仍需专项验证。 |
 | S14 | Gateway 业务命令转发 | 部分验证 | 登录/退出/心跳以外的业务包封装为 `CommandEnvelope`，用 `request_id` 多路复用响应；有 conversation 的请求按健康 Message 集合做亲和路由，无 conversation 的请求走 least-inflight。 |
 | S15 | Message 端连接 fencing | 已验证 | Message 处理命令前重新查询 Redis session lease，校验 Gateway、instance、connection 和 generation，拒绝旧连接或伪造身份。 |
-| S16 | 单聊文本消息闭环 | 已验证 | Message 原子持久化单聊文本，生成 `messageId/conversationSeq`，返回 ACCEPTED，并通过目标 Gateway 投递；重复 `clientMessageId` 且内容一致返回原结果，内容冲突返回不可重试错误。 |
-| S17 | 群聊文本消息闭环 | 已验证 | 群文本由 Message Core 分配同一会话内递增 `conversationSeq`，按成员 fan-out；smoke 覆盖两名成员看到 `[1, 2]` 顺序。 |
-| S18 | conversation_seq 同步 | 已验证 | `ID_PULL_SESSION_MESSAGE_LIST_REQ` 支持按 `conversationId/afterSeq/limit` 拉取，客户端可用最后连续 seq 修复漏推。 |
-| S19 | DELIVERED/READ ACK | 已验证 | TRANSPORT ACK 留在 Gateway；DELIVERED/READ ACK 转发到 Message，按会话成员身份推进消息状态和游标，避免非接收者 ACK 改写状态。 |
+| S16 | 单聊文本消息闭环 | 已验证 | Message 原子持久化唯一一份单聊文本，生成 `messageId/conversationSeq`，返回 ACCEPTED，并向接收者全部在线设备及发送者其他设备读扩散；重复 `clientMessageId` 且内容一致返回原结果，内容冲突返回不可重试错误。 |
+| S17 | 群聊文本消息闭环 | 已验证 | 群文本由 Message Core 分配同一会话内递增 `conversationSeq`，按成员及其全部在线设备 fan-out；smoke 覆盖两名成员看到 `[1, 2]` 顺序。 |
+| S18 | conversation_seq 同步 | 已验证 | `ID_PULL_SESSION_MESSAGE_LIST_REQ` 支持按 `conversationId/afterSeq/limit` 拉取；客户端连续序号立即入库，乱序包等待 200ms，缺口仍存在时按最后连续 `conversationSeq` 补拉。 |
+| S19 | DELIVERED/READ ACK | 已验证 | Gateway 内部返回排队结果；客户端 SQLite 提交后发送 DELIVERED，Message 更新该设备的 `persistedSeq`。READ 只允许私聊接收者改变消息全局状态，发送者其他设备的 ACK 仅推进自身会话/设备游标。 |
 | S20 | 好友申请/回复/列表 | 已验证 | 好友申请、申请列表、回复和好友列表继续由 Message Core 执行业务逻辑，已有 relationship smoke 覆盖主路径。 |
 | S21 | 建群/入群申请/审批 | 已验证 | 创建群、入群申请和审批已接入 Message Core，已有 relationship smoke 覆盖主路径。 |
 | S22 | 文件上传 | 已验证 | 客户端经 Gateway 发起上传命令，Message 调用 File gRPC，File 服务落盘到 `server/file/<uid>/`。 |

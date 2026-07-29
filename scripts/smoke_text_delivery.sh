@@ -122,14 +122,14 @@ try:
         unauthenticated.close()
 
     forged_seq = int(time.time_ns() % 9_000_000_000 + 10_000_000_000)
-    forged_rsp = sender.request(
+    forged_rsp = sender.request_with_retry(
         ID_TEXT_SEND_REQ,
         {
             "seq": forged_seq,
             "from": UID_RECEIVER,
             "to": UID_RECEIVER,
             "data": "forged-sender",
-            "sessionKey": 0,
+            "clientMessageId": f"forged-{forged_seq}",
         },
     )
     require(forged_rsp.get("error") == 0, f"canonicalized send failed: {forged_rsp}")
@@ -139,21 +139,24 @@ try:
     )
     require(canonical_push.get("from") == UID_SENDER,
             f"client from field overrode session principal: {canonical_push}")
-    receiver.ack(int(canonical_push["seq"]))
+    receiver.ack(
+        int(canonical_push["seq"]),
+        conversation_id=canonical_push["conversationId"],
+        conversation_seq=canonical_push["conversationSeq"],
+    )
 
     client_seq = int(time.time_ns() % 9_000_000_000 + 1_000_000_000)
-    sender_rsp = sender.request(
+    sender_rsp = sender.request_with_retry(
         ID_TEXT_SEND_REQ,
         {
             "seq": client_seq,
             "from": UID_SENDER,
             "to": UID_RECEIVER,
             "data": PAYLOAD,
-            "sessionKey": 0,
+            "clientMessageId": f"text-{client_seq}",
         },
     )
     require(sender_rsp.get("error") == 0, f"text send failed: {sender_rsp}")
-    require(sender_rsp.get("seq") == client_seq, f"sender rsp seq mismatch: {sender_rsp}")
     require(sender_rsp.get("messageState") == 1, f"message was not accepted: {sender_rsp}")
     require(sender_rsp.get("messageId", 0) > 0, f"message id missing: {sender_rsp}")
 
@@ -165,18 +168,36 @@ try:
     require(receiver_push.get("data") == PAYLOAD, f"payload mismatch: {receiver_push}")
     server_seq = int(receiver_push["seq"])
 
-    sender.ack(server_seq)
+    sender.ack(
+        server_seq,
+        conversation_id=receiver_push["conversationId"],
+        conversation_seq=receiver_push["conversationSeq"],
+    )
     time.sleep(0.5)
     require(message_status(server_seq) == 1,
             "non-receiver ACK changed message status")
 
-    receiver.ack(server_seq)
+    receiver.ack(
+        server_seq,
+        conversation_id=receiver_push["conversationId"],
+        conversation_seq=receiver_push["conversationSeq"],
+    )
     time.sleep(0.5)
     require(message_status(server_seq) == 2,
             "receiver delivery ACK did not advance status")
-    receiver.ack(server_seq, receipt_type=2)
+    receiver.ack(
+        server_seq,
+        receipt_type=2,
+        conversation_id=receiver_push["conversationId"],
+        conversation_seq=receiver_push["conversationSeq"],
+    )
     time.sleep(0.5)
-    receiver.ack(server_seq, receipt_type=1)
+    receiver.ack(
+        server_seq,
+        receipt_type=1,
+        conversation_id=receiver_push["conversationId"],
+        conversation_seq=receiver_push["conversationSeq"],
+    )
     time.sleep(0.5)
     require(message_status(server_seq) == 3,
             "late delivery ACK regressed READ status")
@@ -211,7 +232,7 @@ mysql_scalar() {
 }
 
 for _ in {1..10}; do
-  row_count="$(mysql_scalar "SELECT COUNT(*) FROM messages WHERE messageId = $server_seq AND senderId = 1001 AND receiverId = 1002 AND conversationId > 0 AND conversationSeq > 0 AND CAST(sessionKey AS UNSIGNED) = conversationId AND content = '$payload' AND status = 3 AND readDateTime <> '';")"
+  row_count="$(mysql_scalar "SELECT COUNT(*) FROM messages WHERE messageId = $server_seq AND senderId = 1001 AND receiverId = 1002 AND conversationId > 0 AND conversationSeq > 0 AND content = '$payload' AND status = 3 AND readDateTime <> '';")"
   if [[ "$row_count" == "1" ]]; then
     echo "online text persisted, delivered and read ok"
     break

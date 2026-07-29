@@ -34,7 +34,8 @@ class GatewayStreamService final
   bool Forward(const db::SessionLease &lease,
                gateway::ClientForwardEnvelope envelope);
   bool ForwardToUser(int64_t recipientUid,
-                     gateway::ClientForwardEnvelope envelope);
+                     gateway::ClientForwardEnvelope envelope,
+                     const std::string &excludedDeviceId = {});
   bool Reply(const std::string &gatewayId, const std::string &instanceId,
              GatewayStreamReactor *reactor,
              gateway::MessageToGatewayFrame frame);

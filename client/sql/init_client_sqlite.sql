@@ -8,7 +8,7 @@ PRAGMA busy_timeout = 5000;
 BEGIN IMMEDIATE;
 
 CREATE TABLE IF NOT EXISTS conversations (
-  -- 本地稳定会话键，例如 direct:<uid> 或 group:<gid>。
+  -- 本地稳定会话键，例如 direct:<uid> 或 group:<groupId>。
   conversation_id TEXT PRIMARY KEY,
   -- 会话列表和会话标题栏展示的名称。
   title TEXT NOT NULL,
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS contacts (
 );
 
 CREATE TABLE IF NOT EXISTS requests (
-  -- 稳定申请键；好友申请使用 uid，群申请使用 group:<gid>:<uid>。
+  -- 稳定申请键；好友申请使用 uid，群申请使用 group:<groupId>:<uid>。
   request_id TEXT PRIMARY KEY,
   -- 申请发起者展示名称。
   display_name TEXT NOT NULL,

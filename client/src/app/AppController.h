@@ -11,7 +11,10 @@
 
 #include <QObject>
 #include <QHash>
+#include <QMap>
 #include <QQmlEngine>
+#include <QSet>
+#include <QTimer>
 
 #include <cstdint>
 #include <memory>
@@ -175,6 +178,8 @@ class AppController : public QObject {
                             int errorCode, const QString &message,
                             bool outcomeUnknown);
   void SyncKnownConversations();
+  void ScheduleGapSync(const QString &localConversationId);
+  void DrainPendingPush(const QString &localConversationId);
   void ResumePendingOutgoing();
   void AcknowledgeConversationRead(int index);
   void SetRequestStatus(int index, const QString &status, bool persist);
@@ -216,6 +221,10 @@ class AppController : public QObject {
   std::int64_t authenticated_uid_{};
   QHash<QString, std::int64_t> outgoing_request_messages_;
   QHash<QString, QString> sync_request_conversations_;
+  QHash<QString, QMap<std::int64_t, QPair<quint32, QByteArray>>>
+      pending_pushes_;
+  QHash<QString, QTimer *> gap_timers_;
+  QSet<QString> gap_syncing_;
   QHash<QString, int> friend_reply_requests_;
   QHash<QString, QString> create_group_requests_;
   QString authentication_error_;

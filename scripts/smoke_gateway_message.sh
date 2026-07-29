@@ -79,9 +79,10 @@ fi
 stamp="$(date +%s%N)"
 uid_a=$((500000 + stamp % 100000))
 uid_b=$((uid_a + 1))
-session_id=$((950000000 + stamp % 10000000))
+friendship_id=$((940000000 + stamp % 10000000))
+conversation_id=$((950000000 + stamp % 10000000))
 group_id=$((700000 + stamp % 100000))
-group_session_id=$((970000000 + stamp % 10000000))
+group_conversation_id=$((970000000 + stamp % 10000000))
 user_a="gateway_a_${stamp}"
 user_b="gateway_b_${stamp}"
 payload="gateway_text_${stamp}"
@@ -101,19 +102,26 @@ INSERT INTO users (uid, username, password, email, createTime) VALUES
 INSERT INTO userInfo (uid, name, age, sex, headImageURL) VALUES
   ($uid_a, 'GatewayA', 21, 'test', '/images/gateway-a.png'),
   ($uid_b, 'GatewayB', 22, 'test', '/images/gateway-b.png');
-INSERT INTO friends (uidA, uidB, sessionId, createTime) VALUES
-  ($uid_a, $uid_b, $session_id, '2026-07-16 00:00:00'),
-  ($uid_b, $uid_a, $session_id, '2026-07-16 00:00:00');
-INSERT INTO groupInfo (gid, sessionKey, name, createTime) VALUES
-  ($group_id, $group_session_id, 'GatewayGroup', '2026-07-16 00:00:00');
-INSERT INTO groupMembers (gid, uid, role, joinTime, speech, memberName) VALUES
+INSERT INTO friends (friendshipId, uidA, uidB, createTime) VALUES
+  ($friendship_id, $uid_a, $uid_b, '2026-07-16 00:00:00');
+INSERT INTO groupInfo (groupId, name, createTime) VALUES
+  ($group_id, 'GatewayGroup', '2026-07-16 00:00:00');
+INSERT INTO conversations (conversationId, type, businessId, latestSeq, createTime) VALUES
+  ($conversation_id, 1, $friendship_id, 0, '2026-07-16 00:00:00'),
+  ($group_conversation_id, 2, $group_id, 0, '2026-07-16 00:00:00');
+INSERT INTO conversationUserStates (conversationId, uid, joinedSeq) VALUES
+  ($conversation_id, $uid_a, 1),
+  ($conversation_id, $uid_b, 1),
+  ($group_conversation_id, $uid_a, 1),
+  ($group_conversation_id, $uid_b, 1);
+INSERT INTO groupMembers (groupId, uid, role, joinTime, speech, memberName) VALUES
   ($group_id, $uid_a, 2, '2026-07-16 00:00:00', 0, 'GatewayA'),
   ($group_id, $uid_b, 0, '2026-07-16 00:00:00', 0, 'GatewayB');
 SQL
 
 UID_A="$uid_a" UID_B="$uid_b" USER_A="$user_a" USER_B="$user_b" \
-SESSION_ID="$session_id" PAYLOAD="$payload" \
-GROUP_ID="$group_id" GROUP_SESSION_ID="$group_session_id" \
+CONVERSATION_ID="$conversation_id" PAYLOAD="$payload" \
+GROUP_ID="$group_id" GROUP_CONVERSATION_ID="$group_conversation_id" \
 CLIENT_MESSAGE_ID="$client_message_id" GATEWAY_A_HOST="$GATEWAY_A_HOST" \
 GATEWAY_A_PORT="$GATEWAY_A_PORT" GATEWAY_B_HOST="$GATEWAY_B_HOST" \
 GATEWAY_B_PORT="$GATEWAY_B_PORT" GATEWAY_A_ID="$GATEWAY_A_ID" \
@@ -134,20 +142,20 @@ ID_GROUP_TEXT_SEND_REQ = 1043
 
 uid_a = int(os.environ["UID_A"])
 uid_b = int(os.environ["UID_B"])
-session_id = int(os.environ["SESSION_ID"])
+conversation_id = int(os.environ["CONVERSATION_ID"])
 group_id = int(os.environ["GROUP_ID"])
-group_session_id = int(os.environ["GROUP_SESSION_ID"])
+group_conversation_id = int(os.environ["GROUP_CONVERSATION_ID"])
 payload = os.environ["PAYLOAD"]
 client_message_id = os.environ["CLIENT_MESSAGE_ID"]
 
 
-def lease(uid):
+def lease(uid, device_id):
     value = subprocess.check_output(
         [
             "redis-cli", "-h", os.environ["WIMI_REDIS_HOST"],
             "-p", os.environ["WIMI_REDIS_PORT"],
             "-a", os.environ["WIMI_REDIS_PASSWORD"],
-            "GET", f"im:session:{uid}",
+            "GET", f"im:session:{uid}:{device_id}",
         ],
         stderr=subprocess.DEVNULL,
         text=True,
@@ -162,14 +170,28 @@ a = WimClient(uid_a, os.environ["GATEWAY_A_HOST"],
               int(os.environ["GATEWAY_A_PORT"]), auth_token=auth_a["chatToken"])
 b = WimClient(uid_b, os.environ["GATEWAY_B_HOST"],
               int(os.environ["GATEWAY_B_PORT"]), auth_token=auth_b["chatToken"])
+a_secondary = WimClient(
+    uid_a, os.environ["GATEWAY_B_HOST"], int(os.environ["GATEWAY_B_PORT"]),
+    auth_token=auth_a["chatToken"])
+b_secondary = WimClient(
+    uid_b, os.environ["GATEWAY_A_HOST"], int(os.environ["GATEWAY_A_PORT"]),
+    auth_token=auth_b["chatToken"])
 
 try:
     a.login(init=False)
     b.login(init=False)
-    lease_a = lease(uid_a)
-    lease_b = lease(uid_b)
+    a_secondary.login(init=False)
+    b_secondary.login(init=False)
+    lease_a = lease(uid_a, a.device_id)
+    lease_b = lease(uid_b, b.device_id)
+    lease_a_secondary = lease(uid_a, a_secondary.device_id)
+    lease_b_secondary = lease(uid_b, b_secondary.device_id)
     require(lease_a["gatewayId"] == os.environ["GATEWAY_A_ID"], lease_a)
     require(lease_b["gatewayId"] == os.environ["GATEWAY_B_ID"], lease_b)
+    require(lease_a_secondary["gatewayId"] == os.environ["GATEWAY_B_ID"],
+            lease_a_secondary)
+    require(lease_b_secondary["gatewayId"] == os.environ["GATEWAY_A_ID"],
+            lease_b_secondary)
     require(int(lease_a["generation"]) > 0 and int(lease_b["generation"]) > 0,
             "lease generation was not allocated")
 
@@ -177,13 +199,13 @@ try:
         "seq": int(client_message_id.split("_")[-1]) % 9_000_000_000 + 1,
         "to": uid_b,
         "data": payload,
-        "conversationId": session_id,
+        "conversationId": conversation_id,
         "clientMessageId": client_message_id,
     }
     accepted = a.request(ID_TEXT_SEND_REQ, command)
     require(accepted.get("error") == 0, accepted)
     require(accepted.get("messageState") == 1, accepted)
-    require(accepted.get("conversationId") == session_id, accepted)
+    require(accepted.get("conversationId") == conversation_id, accepted)
     require(accepted.get("conversationSeq", 0) > 0, accepted)
 
     pushed = b.expect_async(
@@ -192,12 +214,35 @@ try:
     )
     require(pushed.get("messageId") == accepted.get("messageId"), pushed)
     require(pushed.get("conversationSeq") == accepted.get("conversationSeq"), pushed)
-    b.ack(pushed["seq"], receipt_type=3)
+    pushed_secondary = b_secondary.expect_async(
+        ID_TEXT_SEND_REQ,
+        lambda item: item.get("clientMessageId") == client_message_id,
+    )
+    sender_secondary = a_secondary.expect_async(
+        ID_TEXT_SEND_REQ,
+        lambda item: item.get("clientMessageId") == client_message_id,
+    )
+    require(pushed_secondary.get("messageId") == accepted.get("messageId"),
+            pushed_secondary)
+    require(sender_secondary.get("messageId") == accepted.get("messageId"),
+            sender_secondary)
     b.ack(
         pushed["seq"], receipt_type=1,
-        conversation_id=session_id,
+        conversation_id=conversation_id,
         conversation_seq=pushed["conversationSeq"],
     )
+    b_secondary.ack(
+        pushed_secondary["seq"], receipt_type=1,
+        conversation_id=conversation_id,
+        conversation_seq=pushed_secondary["conversationSeq"],
+    )
+    a_secondary.ack(
+        sender_secondary["seq"], receipt_type=1,
+        conversation_id=conversation_id,
+        conversation_seq=sender_secondary["conversationSeq"],
+    )
+    a_secondary.quit(wait_response=True)
+    b_secondary.quit(wait_response=True)
 
     duplicate = a.request(ID_TEXT_SEND_REQ, command)
     require(duplicate.get("error") == 0, duplicate)
@@ -216,7 +261,7 @@ try:
 
     sync = b.request(
         ID_PULL_SESSION_MESSAGE_LIST_REQ,
-        {"conversationId": session_id, "afterSeq": 0, "limit": 20},
+        {"conversationId": conversation_id, "afterSeq": 0, "limit": 20},
     )
     require(sync.get("error") == 0, sync)
     matches = [item for item in sync["messageList"]
@@ -228,9 +273,9 @@ try:
         ID_GROUP_TEXT_SEND_REQ,
         {
             "seq": command["seq"] + 1,
-            "gid": group_id,
+            "groupId": group_id,
             "data": payload + "_group_a",
-            "conversationId": group_session_id,
+            "conversationId": group_conversation_id,
             "clientMessageId": client_message_id + "_group_a",
         },
     )
@@ -240,15 +285,16 @@ try:
         ID_GROUP_TEXT_SEND_REQ,
         lambda item: item.get("clientMessageId") == client_message_id + "_group_a",
     )
-    b.ack(group_push_b["seq"], receipt_type=3)
+    b.ack(group_push_b["seq"], conversation_id=group_conversation_id,
+          conversation_seq=group_push_b["conversationSeq"])
 
     group_second = b.request(
         ID_GROUP_TEXT_SEND_REQ,
         {
             "seq": command["seq"] + 2,
-            "gid": group_id,
+            "groupId": group_id,
             "data": payload + "_group_b",
-            "conversationId": group_session_id,
+            "conversationId": group_conversation_id,
             "clientMessageId": client_message_id + "_group_b",
         },
     )
@@ -258,11 +304,12 @@ try:
         ID_GROUP_TEXT_SEND_REQ,
         lambda item: item.get("clientMessageId") == client_message_id + "_group_b",
     )
-    a.ack(group_push_a["seq"], receipt_type=3)
+    a.ack(group_push_a["seq"], conversation_id=group_conversation_id,
+          conversation_seq=group_push_a["conversationSeq"])
 
     group_sync = a.request(
         ID_PULL_SESSION_MESSAGE_LIST_REQ,
-        {"conversationId": group_session_id, "afterSeq": 0, "limit": 20},
+        {"conversationId": group_conversation_id, "afterSeq": 0, "limit": 20},
     )
     require(group_sync.get("error") == 0, group_sync)
     require([item["conversationSeq"] for item in group_sync["messageList"]]
@@ -273,6 +320,8 @@ try:
 finally:
     a.quit()
     b.quit()
+    a_secondary.close()
+    b_secondary.close()
 PY
 
 message_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["messageId"])' "$result_file")"

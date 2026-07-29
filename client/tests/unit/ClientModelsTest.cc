@@ -132,6 +132,7 @@ class ClientModelsTest final : public QObject {
   void sqliteMigratesVersionOneToCurrent();
   void sqliteRejectsNewerSchema();
   void sqliteAppliesLargeIncomingBatchIdempotently();
+  void sqliteLoadsMessagesByConversationSequence();
   void sqlitePersistsNetworkProjection();
   void platformNotificationPortUpdatesControllerState();
   void tcpFrameCodecHandlesFragmentationAndCoalescing();
@@ -450,12 +451,18 @@ void ClientModelsTest::sqlitePersistsOutboxDraftAndSyncCursor() {
     QVERIFY(outgoingRestored);
     QCOMPARE(repository.OutboxCount(), 1);
 
+    QVERIFY(repository.ApplyIncomingBatch(QStringLiteral("alice"), {}, 42));
     QVERIFY(repository.UpdateDeliveryState(
         outgoing.clientMessageId, MessageDeliveryState::WaitingAccept));
     QVERIFY2(repository.AcceptOutgoing(outgoing.clientMessageId, 9000,
                                        QStringLiteral("alice"), 43),
              qPrintable(repository.LastError()));
     QCOMPARE(repository.OutboxCount(), 0);
+    // ACCEPTED only assigns the server identity. The persisted cursor advances
+    // after that exact sequence has been committed as part of the contiguous
+    // local conversation stream.
+    QCOMPARE(repository.SyncCursor(QStringLiteral("alice")), 42);
+    QVERIFY(repository.ApplyIncomingBatch(QStringLiteral("alice"), {}, 43));
     QCOMPARE(repository.SyncCursor(QStringLiteral("alice")), 43);
 
     const auto afterAccept =
@@ -614,6 +621,44 @@ void ClientModelsTest::sqliteAppliesLargeIncomingBatchIdempotently() {
   QVERIFY2(elapsedMilliseconds < 5000,
            qPrintable(QStringLiteral("two 2000-message sync batches took %1 ms")
                           .arg(elapsedMilliseconds)));
+}
+
+void ClientModelsTest::sqliteLoadsMessagesByConversationSequence() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  SqliteClientRepository repository(
+      directory.filePath(QStringLiteral("ordered.sqlite")), false);
+  QVERIFY2(repository.IsReady(), qPrintable(repository.LastError()));
+  QVERIFY(repository.SaveConversation(ConversationRecord{
+      .conversationId = QStringLiteral("direct:42"),
+      .title = QStringLiteral("Alice"),
+      .avatarColor = QStringLiteral("#315FD6"),
+      .remoteConversationId = 9001,
+  }));
+
+  QVector<MessageRecord> reversed;
+  for (const std::int64_t sequence : {3, 1, 2}) {
+    reversed.push_back(MessageRecord{
+        .clientMessageId = 7000 + sequence,
+        .messageId = 7000 + sequence,
+        .conversationSeq = sequence,
+        .senderId = QStringLiteral("42"),
+        .body = QStringLiteral("message-%1").arg(sequence),
+        .timestamp = QStringLiteral("14:00"),
+        .outgoing = false,
+        .deliveryState = MessageDeliveryState::Delivered,
+    });
+  }
+  QVERIFY(
+      repository.ApplyIncomingBatch(QStringLiteral("direct:42"), reversed, 3));
+
+  const auto restored = repository.LoadScenario(QStringLiteral("local-sqlite"));
+  const auto messages =
+      restored.messagesByConversation.value(QStringLiteral("direct:42"));
+  QCOMPARE(messages.size(), 3);
+  QCOMPARE(messages[0].conversationSeq, std::optional<std::int64_t>(1));
+  QCOMPARE(messages[1].conversationSeq, std::optional<std::int64_t>(2));
+  QCOMPARE(messages[2].conversationSeq, std::optional<std::int64_t>(3));
 }
 
 void ClientModelsTest::sqlitePersistsNetworkProjection() {

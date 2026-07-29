@@ -84,7 +84,7 @@ message Packet {
   optional string file_type = 20;           // 文件类型文本
   optional int32 type = 21;                 // 消息/业务类型
   optional int32 limit = 23;                // 单次拉取数量上限
-  optional int64 gid = 24;                  // 群组业务 ID
+  optional int64 group_id = 24;             // 群组业务 ID
   optional string group_name = 26;          // 群组名称
   optional int64 manager_uid = 27;          // 群管理员用户 ID
   optional int64 requestor_uid = 28;        // 群申请人用户 ID
@@ -117,4 +117,5 @@ message Packet {
   optional bool has_more = 55;                // 是否仍有后续消息
   optional int64 latest_seq = 56;             // 会话当前最新序号
   optional ConversationType conversation_type = 57; // 会话类型
+  optional string device_id = 58;           // 客户端安装实例 UUID
 }

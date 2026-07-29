@@ -118,7 +118,8 @@ ClientSnapshot SqliteClientRepository::LoadScenario(const QString &) const {
           "SELECT conversation_id, client_message_id, message_id, "
           "conversation_seq, sender_id, body, timestamp, outgoing, "
           "delivery_state FROM messages "
-          "ORDER BY conversation_id, local_order ASC"))) {
+          "ORDER BY conversation_id, conversation_seq IS NULL, "
+          "conversation_seq ASC, local_order ASC"))) {
     while (messagesQuery.next()) {
       MessageRecord message{
           .clientMessageId = messagesQuery.value(1).toLongLong(),
@@ -279,20 +280,6 @@ bool SqliteClientRepository::AcceptOutgoing(std::int64_t clientMessageId,
   updateQuery.addBindValue(QVariant::fromValue<qlonglong>(clientMessageId));
   if (!updateQuery.exec()) {
     SetError(updateQuery.lastError().text());
-    database_.rollback();
-    return false;
-  }
-
-  QSqlQuery cursorQuery(database_);
-  cursorQuery.prepare(QStringLiteral(
-      "INSERT INTO sync_state(scope, cursor, updated_at) "
-      "VALUES(?, ?, strftime('%s','now')) "
-      "ON CONFLICT(scope) DO UPDATE SET cursor = MAX(cursor, excluded.cursor), "
-      "updated_at = excluded.updated_at"));
-  cursorQuery.addBindValue(QStringLiteral("conversation:") + conversationId);
-  cursorQuery.addBindValue(QVariant::fromValue<qlonglong>(conversationSeq));
-  if (!cursorQuery.exec()) {
-    SetError(cursorQuery.lastError().text());
     database_.rollback();
     return false;
   }

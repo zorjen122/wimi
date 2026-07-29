@@ -43,8 +43,7 @@ std::chrono::milliseconds ResolvePositiveMilliseconds(const char *name,
 }  // namespace
 
 Service::Service()
-    : friendService(clientForwardService),
-      groupService(clientForwardService) {
+    : friendService(clientForwardService), groupService(clientForwardService) {
   Init();
   requestTimeout =
       ResolvePositiveMilliseconds("WIMI_CHAT_REQUEST_TIMEOUT_MS", 3000);
@@ -87,9 +86,6 @@ void Service::RegisterHandle(uint32_t msgID, TaskType taskType,
 
 void Service::Init() {
   // 状态
-  RegisterHandle(ID_ACK, TaskType::Heavy, [this](auto msgID, auto &request) {
-    return messageService.Ack(request).response;
-  });
 
   // 消息与文件
   RegisterHandle(ID_TEXT_SEND_REQ, TaskType::Heavy,
@@ -122,7 +118,8 @@ void Service::Init() {
   // 消息拉取
   RegisterHandle(ID_PULL_SESSION_MESSAGE_LIST_REQ, TaskType::Heavy,
                  [this](auto msgID, auto &request) {
-                   return messageService.PullSessionMessages(msgID, request);
+                   return messageService.PullConversationMessages(msgID,
+                                                                  request);
                  });
   // 群聊
   RegisterHandle(ID_GROUP_CREATE_REQ, TaskType::Heavy,

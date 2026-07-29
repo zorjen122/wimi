@@ -225,6 +225,7 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
         if (frame.serviceId == protocol::LoginRequest) {
           QCOMPARE(packet.uid(), 42);
           QCOMPARE(packet.authToken(), QStringLiteral("token-42"));
+          QVERIFY(!packet.deviceId().isEmpty());
           QVERIFY(!packet.requestId().isEmpty());
           wimi::protocol::Packet response;
           response.setError(protocol::Success);
@@ -324,7 +325,7 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts() {
   QCOMPARE(packets[protocol::SendTextRequest].to(), 43);
   QCOMPARE(packets[protocol::SendTextRequest].clientMessageId(),
            QStringLiteral("client-text"));
-  QCOMPARE(packets[protocol::SendGroupTextRequest].gid(), 5001);
+  QCOMPARE(packets[protocol::SendGroupTextRequest].groupId(), 5001);
   QCOMPARE(packets[protocol::UploadFileRequest].fileType(),
            QStringLiteral("TEXT"));
   for (const quint32 service : expectedServices) {
@@ -401,6 +402,7 @@ void ClientNetworkTest::gatewayReconnectsAndAuthenticatesAgain() {
   QCOMPARE(loginPackets.size(), 1);
   QVERIFY(loginPackets[0].init());
   QCOMPARE(loginPackets[0].name(), QStringLiteral("new-user"));
+  QVERIFY(!loginPackets[0].deviceId().isEmpty());
 
   const auto sockets = server.findChildren<QTcpSocket *>();
   QVERIFY(!sockets.isEmpty());
@@ -409,6 +411,7 @@ void ClientNetworkTest::gatewayReconnectsAndAuthenticatesAgain() {
   QCOMPARE(acceptedConnections, 2);
   QCOMPARE(loginPackets.size(), 2);
   QVERIFY(!loginPackets[1].init());
+  QCOMPARE(loginPackets[1].deviceId(), loginPackets[0].deviceId());
   gateway.Close();
 }
 

@@ -130,10 +130,6 @@ expect_count() {
   echo "$label ok"
 }
 
-timeout 3 redis-cli -h "$WIMI_REDIS_HOST" -p "$WIMI_REDIS_PORT" \
-  -a "$WIMI_REDIS_PASSWORD" DEL "im:session:$uid_a" "im:session:$uid_b" \
-  >/dev/null 2>&1 || true
-
 mysql_exec <<SQL
 INSERT INTO users (uid, username, password, email, createTime) VALUES
   ($uid_a, '$user_a', '123456', '$user_a@example.com', '2026-07-11 00:00:00'),
@@ -200,7 +196,7 @@ ID_TEXT_READ_RECEIPT_NOTIFY = 1045
 NOTIFY_MESSAGE_READ = 2 
 MESSAGE_READ = 3
 
-def redis_session_lease(uid):
+def redis_session_lease(uid, device_id):
     output = subprocess.check_output(
         [
             "redis-cli",
@@ -211,7 +207,7 @@ def redis_session_lease(uid):
             "-a",
             REDIS_PASSWORD,
             "GET",
-            f"im:session:{uid}",
+            f"im:session:{uid}:{device_id}",
         ],
         stderr=subprocess.DEVNULL,
         text=True,
@@ -237,8 +233,8 @@ try:
     a.login(init=False)
     b.login(init=False)
 
-    lease_a = redis_session_lease(UID_A)
-    lease_b = redis_session_lease(UID_B)
+    lease_a = redis_session_lease(UID_A, a.device_id)
+    lease_b = redis_session_lease(UID_B, b.device_id)
     require(lease_a["gatewayId"] == GATEWAY_A_ID,
             f"uid {UID_A} is on {lease_a['gatewayId']}, expected {GATEWAY_A_ID}")
     require(lease_b["gatewayId"] == GATEWAY_B_ID,
@@ -378,16 +374,16 @@ server_seq="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["s
 delayed_server_seq="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["delayed_server_seq"])' "$result_file")"
 
 for _ in {1..10}; do
-  text_count="$(mysql_scalar "SELECT COUNT(*) FROM messages WHERE messageId = $server_seq AND senderId = $uid_a AND receiverId = $uid_b AND CAST(sessionKey AS UNSIGNED) = conversationId AND content = '$text_payload' AND status = MESSAGE_READ AND COALESCE(readDateTime, '') = '';")"
+  text_count="$(mysql_scalar "SELECT COUNT(*) FROM messages WHERE messageId = $server_seq AND senderId = $uid_a AND receiverId = $uid_b AND conversationId > 0 AND conversationSeq > 0 AND content = '$text_payload' AND status = 3 AND COALESCE(readDateTime, '') <> '';")"
   if [[ "$text_count" == "1" ]]; then
-    echo "cross-node text mysql DELIVERED ack ok"
+    echo "cross-node text mysql READ ack ok"
     break
   fi
   sleep 1
 done
 
 if [[ "${text_count:-0}" != "1" ]]; then
-  echo "cross-node text row was not persisted as DELIVERED"
+  echo "cross-node text row was not persisted as READ"
   mysql_exec -e "SELECT * FROM messages WHERE messageId = $server_seq;" || true
   exit 1
 fi
@@ -407,6 +403,6 @@ expect_count \
 expect_count \
   "cross-node friend relation rows" \
   "SELECT COUNT(*) FROM friends WHERE (uidA = $uid_a AND uidB = $uid_b) OR (uidA = $uid_b AND uidB = $uid_a);" \
-  "2"
+  "1"
 
 echo "multi chat smoke ok"

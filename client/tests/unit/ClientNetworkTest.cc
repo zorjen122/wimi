@@ -57,6 +57,7 @@ class ClientNetworkTest final : public QObject
     void gateCoversAccountRequests();
     void gatewayCoversSupportedRequestAndReceiptContracts();
     void gatewayReconnectsAndAuthenticatesAgain();
+    void gatewayCanBeDestroyedWhileConnected();
 };
 
 void ClientNetworkTest::qtProtobufMatchesCanonicalWireFormat()
@@ -307,7 +308,7 @@ void ClientNetworkTest::gatewayCoversSupportedRequestAndReceiptContracts()
     QCOMPARE(packets[protocol::UploadFileRequest].fileType(), QStringLiteral("TEXT"));
     for (const quint32 service : expectedServices) {
         QVERIFY(!packets[service].requestId().isEmpty());
-        QCOMPARE(packets[service].requestTimeoutMs(), 3000U);
+        QCOMPARE(packets[service].requestTimeoutMs(), 10'000U);
     }
 
     wimi::protocol::Packet push;
@@ -384,6 +385,24 @@ void ClientNetworkTest::gatewayReconnectsAndAuthenticatesAgain()
     QVERIFY(!loginPackets[1].init());
     QCOMPARE(loginPackets[1].deviceId(), loginPackets[0].deviceId());
     gateway.Close();
+}
+
+void ClientNetworkTest::gatewayCanBeDestroyedWhileConnected()
+{
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+
+    {
+        ConnectionGatewayClient gateway;
+        gateway.Open(GateSession{
+            .uid = 77,
+            .gatewayHost = QStringLiteral("127.0.0.1"),
+            .gatewayPort = server.serverPort(),
+            .token = QStringLiteral("token-77"),
+            .tokenExpiresInSeconds = 900,
+        });
+        QTRY_COMPARE(gateway.CurrentState(), ConnectionGatewayClient::State::Authenticating);
+    }
 }
 
 } // namespace wimi::client

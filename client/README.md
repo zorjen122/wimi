@@ -1,9 +1,6 @@
 # WIMI Client
 
-WIMI 的跨平台用户客户端，使用 Qt 6、QML 和 C++20。当前阶段以 Linux Desktop
-为首要平台，支持确定性的 Fake Scenario、本地 SQLite，以及 Auth Gate +
-Connection Gateway 真实网络模式。网络代码已按当前服务端源码契约实现；真实服务端
-联调已通过可选的 live network test 覆盖核心单聊链路。
+WIMI 的跨平台用户客户端，使用 Qt 6、QML 和 C++20。
 
 ## 当前能力
 
@@ -55,10 +52,6 @@ cmake --build build/client-clang -j2
 ctest --test-dir build/client-clang --output-on-failure
 ```
 
-当前 Ubuntu 26.04 环境的 GCC 15.2 会生成 Binutils 2.42 不支持的 `.base64`
-汇编指令，因此 Linux preset 明确使用系统 Clang。它属于当前工具链组合问题，
-不是客户端源代码对 Clang 的依赖。
-
 ## 运行与场景
 
 ```bash
@@ -73,8 +66,6 @@ ctest --test-dir build/client-clang --output-on-failure
 `long-content`、`large-history`。`large-history` 会为首个会话附加 2000 条消息，
 用于模型装载和 QML ListView 虚拟化回归。
 
-开发回归可通过 `--screenshot=/path/to/image.png` 在首帧稳定后抓图。
-
 使用本地 SQLite：
 
 ```bash
@@ -85,7 +76,7 @@ ctest --test-dir build/client-clang --output-on-failure
 
 未指定 `--database` 时，数据库写入 Qt 的应用本地数据目录，并按 `--account`
 隔离。当前 SQLite 模式会在空数据库中写入可交互的演示数据。
-纯表结构初始化脚本位于 `client/sql/init_client_sqlite.sql`，与当前 schema v3 对齐。
+纯表结构初始化脚本位于 `client/sql/init_client_sqlite.sql`
 
 ## 真实服务模式
 
@@ -106,18 +97,6 @@ ctest --test-dir build/client-clang --output-on-failure
 本地服务。
 本地开发链路仍是明文 HTTP/TCP；公网部署前必须增加 TLS 和凭证安全存储。
 
-## 当前服务请求边界
-
-客户端只连接 Auth Gate 返回的 Connection Gateway，不发现 Message 节点，也不生成
-或使用服务端内部 `gateway_message.proto`。客户端仅从公开 `tcp_message.proto` 生成
-C++ 类型。
-
-当前接入服务端已注册的请求：登录、心跳、退出、好友列表、好友申请列表、发起/回复
-好友申请、单聊和群聊文本、单会话增量拉取、旧全量拉取、群创建、入群申请/审批、
-文件上传及 ACK。`SEARCH_USER`、`REMOVE_FRIEND`、`GROUP_PULL_MEMBER`、
-`GROUP_QUIT` 等虽然已有 Service ID，但服务端没有注册 handler，客户端本阶段不会
-提供伪实现。群创建后会建立本地群会话并可发送群文本；文件上传已有 C++ 请求接口，
-但服务端 `FILE_SEND` 仍为空实现，因此本阶段不伪造附件发送 UI。
 
 ## 静态检查
 
@@ -150,10 +129,6 @@ ctest --test-dir build/client-clang -R '^client-live-network$' \
   --output-on-failure
 ```
 
-该测试覆盖真实 Gate 登录、Gateway 鉴权、好友拉取、文本持久接受、接收端推送、
-DELIVERED/READ 回执，以及按 `conversation_seq` 增量同步。测试账号必须已是
-好友；未设置上述环境变量时，该测试会跳过而不是访问默认地址。
-
 ## Linux 桌面集成
 
 Linux 构建使用 Qt DBus 调用 `org.freedesktop.Notifications`，不依赖特定桌面环境。
@@ -165,10 +140,6 @@ Linux 构建使用 Qt DBus 调用 `org.freedesktop.Notifications`，不依赖特
 ```bash
 cmake --install build/client-clang --prefix /tmp/wimi-client-install
 ```
-
-这会安装 `bin/wimi-client`、`share/applications/wimi-client.desktop` 和
-`share/icons/hicolor/scalable/apps/wimi-client.svg`。Secret Service 暂不接入，等待
-服务端正式 token/refresh 契约确定后再设计密钥生命周期。
 
 ## Android
 

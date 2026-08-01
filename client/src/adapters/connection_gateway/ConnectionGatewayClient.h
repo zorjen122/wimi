@@ -35,6 +35,7 @@ class ConnectionGatewayClient final : public QObject
     Q_ENUM(State)
 
     explicit ConnectionGatewayClient(QObject* parent = nullptr);
+    ~ConnectionGatewayClient() override;
 
     State CurrentState() const;
     bool IsReady() const;
@@ -80,7 +81,7 @@ class ConnectionGatewayClient final : public QObject
         int timeoutMilliseconds{};
     };
 
-    QString QueueRequest(quint32 serviceId, wimi::protocol::Packet packet, int timeoutMilliseconds = 5000);
+    QString QueueRequest(quint32 serviceId, wimi::protocol::Packet packet, int timeoutMilliseconds = 12'000);
     void SendFront(quint32 responseServiceId);
     void CompleteFront(quint32 responseServiceId, const QByteArray& payload);
     void FailAllPending(int errorCode, const QString& message, bool outcomeUnknown);

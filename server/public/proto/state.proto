@@ -12,10 +12,8 @@ message ConnectUserRsp {
   string node_id = 3; // 被选中的 Gateway 节点 ID
 }
 
-// Gateway 拉取 Message 拓扑时携带的本地版本。
-message TopologyRequest {
-  uint64 known_version = 1; // Gateway 当前已知的拓扑版本
-}
+// Gateway 请求当前完整 Message 节点快照。
+message TopologyRequest {}
 
 // State 返回的单个服务节点描述。
 message ServiceNode {
@@ -26,15 +24,14 @@ message ServiceNode {
   uint32 weight = 5;  // 预留路由权重
 }
 
-// 带版本号的完整 Message 节点快照。
+// 当前完整 Message 节点快照。
 message MessageTopology {
-  uint64 topology_version = 1; // State 当前拓扑版本
-  repeated ServiceNode nodes = 2; // 当前可见的 Message 节点列表
+  repeated ServiceNode nodes = 1; // 当前可见的 Message 节点列表
 }
 
 service StateService {
   // 为客户端选择 Connection Gateway。
   rpc PickConnectionGateway(ConnectUser) returns (ConnectUserRsp) {}
-  // 返回版本化 Message 节点拓扑。
+  // 返回完整 Message 节点拓扑。
   rpc ListMessageNodes(TopologyRequest) returns (MessageTopology) {}
 }

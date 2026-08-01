@@ -18,7 +18,6 @@
 #include <grpcpp/security/credentials.h>
 #include <algorithm>
 #include <chrono>
-#include <random>
 #include <utility>
 
 namespace wimi::connection
@@ -27,8 +26,7 @@ namespace asio = boost::asio;
 namespace
 {
 
-constexpr auto kReconnectBase = std::chrono::milliseconds(200);
-constexpr auto kReconnectMaximum = std::chrono::seconds(10);
+constexpr auto kForwardAttemptTimeout = std::chrono::milliseconds(1000);
 
 int64_t NowUnixMilliseconds()
 {
@@ -36,19 +34,9 @@ int64_t NowUnixMilliseconds()
         .count();
 }
 
-bool CanRetryOnAnotherMessageNode(uint32_t serviceId)
+bool CanReplayCommand(uint32_t serviceId)
 {
-    switch (serviceId) {
-    case ID_TEXT_SEND_REQ:
-    case ID_GROUP_TEXT_SEND_REQ:
-    case ID_PULL_FRIEND_LIST_REQ:
-    case ID_PULL_FRIEND_APPLY_LIST_REQ:
-    case ID_PULL_SESSION_MESSAGE_LIST_REQ:
-    case ID_ACK:
-        return true;
-    default:
-        return false;
-    }
+    return serviceId == ID_TEXT_SEND_REQ || serviceId == ID_GROUP_TEXT_SEND_REQ;
 }
 
 } // namespace
@@ -69,11 +57,10 @@ MessageLinkManager::~MessageLinkManager() { Stop(); }
 
 void MessageLinkManager::Start()
 {
-    TopologySnapshot initial;
-    initial.changed = true;
-    initial.version = 0;
-    initial.nodes = LoadConfiguredNodes();
-    ApplyTopology(initial);
+    if (stateAddress.empty()) {
+        LOG_ERROR(netLogger, "Gateway-Message topology requires stateRPC configuration");
+        return;
+    }
     asio::co_spawn(ioContext, TopologyLoop(), asio::detached);
 }
 
@@ -100,6 +87,8 @@ void MessageLinkManager::Stop()
     for (auto& command : abandoned) {
         if (command.deadlineTimer)
             command.deadlineTimer->cancel();
+        if (command.attemptTimer)
+            command.attemptTimer->cancel();
         if (!command.callback)
             continue;
         gateway::CommandResult result;
@@ -121,24 +110,40 @@ std::size_t MessageLinkManager::HealthyLinkCount() const
     return std::count_if(links.begin(), links.end(), [](const auto& item) { return item.second->Healthy(); });
 }
 
-bool MessageLinkManager::Forward(gateway::CommandEnvelope command, CommandCallback callback)
+asio::awaitable<bool> MessageLinkManager::Forward(gateway::CommandEnvelope command, CommandCallback callback)
 {
+    if (stopping.load(std::memory_order_acquire))
+        co_return false;
+
     const int64_t now = NowUnixMilliseconds();
     if (command.deadline_unix_ms() <= now)
-        return false;
+        co_return false;
+
     auto link = SelectLink(command.conversation_id());
     if (!link)
-        return false;
+        co_return false;
 
     const std::string requestId = command.request_id();
     auto deadlineTimer = std::make_shared<asio::steady_timer>(ioContext);
+    auto attemptTimer = std::make_shared<asio::steady_timer>(ioContext);
     deadlineTimer->expires_after(std::chrono::milliseconds(command.deadline_unix_ms() - now));
+
     {
         std::lock_guard<std::mutex> lock(pendingMutex);
         if (pending.contains(requestId))
-            return false;
-        pending.emplace(requestId, PendingCommand{command, std::move(callback), link->Id(), 0, deadlineTimer});
+            co_return false;
+
+        PendingCommand pendingCommand;
+        pendingCommand.command = command;
+        pendingCommand.callback = std::move(callback);
+        pendingCommand.deadlineTimer = deadlineTimer;
+        pendingCommand.attemptTimer = attemptTimer;
+        pendingCommand.currentLinkToken = link->Token();
+        pendingCommand.attempt = 1;
+        pending.emplace(requestId, std::move(pendingCommand));
     }
+
+    // 总 deadline 覆盖首次入队失败后等待链路恢复或切换的时间。
     deadlineTimer->async_wait([this, requestId](const boost::system::error_code& error) {
         if (!error)
             ExpirePending(requestId);
@@ -146,31 +151,31 @@ bool MessageLinkManager::Forward(gateway::CommandEnvelope command, CommandCallba
 
     gateway::GatewayToMessageFrame frame;
     *frame.mutable_command() = std::move(command);
-    if (!link->Enqueue(std::move(frame))) {
-        PendingCommand rejected;
-        {
-            std::lock_guard<std::mutex> lock(pendingMutex);
-            auto found = pending.find(requestId);
-            if (found != pending.end()) {
-                rejected = std::move(found->second);
-                pending.erase(found);
-            }
-        }
-        deadlineTimer->cancel();
-        if (rejected.callback) {
-            gateway::CommandResult result;
-            result.set_request_id(requestId);
-            result.set_response_service_id(__getServiceResponseId(ServiceID(rejected.command.service_id())));
-            result.set_error(ErrorCodes::ResourceExhausted);
-            result.set_retryable(true);
-            result.set_packet(
-                SerializeTcpPacket(MakeErrorPacket(ErrorCodes::ResourceExhausted, "message stream queue is full")));
-            rejected.callback(result);
-        }
-        return true;
+
+    const auto enqueueResult = link->Enqueue(std::move(frame));
+    if (enqueueResult == MessageLink::EnqueueResult::Accepted) {
+        link->IncrementInflight();
+
+        // 单次投递 deadline 仅在帧已进入链路写队列后开始计时。
+        ArmAttemptTimer(requestId, 1);
+        co_return true;
     }
-    link->IncrementInflight();
-    return true;
+
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex);
+        auto found = pending.find(requestId);
+        if (found != pending.end()) {
+            found->second.retryPending = true;
+
+            if (enqueueResult == MessageLink::EnqueueResult::Stopped)
+                found->second.ignoredLinkTokens.insert(link->Token());
+        }
+    }
+
+    // Enqueue 返回失败意味着帧未进入该链路的写队列，可以安全地立即重新选择链路。
+    RetryPending();
+
+    co_return true;
 }
 
 void MessageLinkManager::SetClientForwardHandler(ClientForwardHandler handler)
@@ -180,19 +185,18 @@ void MessageLinkManager::SetClientForwardHandler(ClientForwardHandler handler)
 
 asio::awaitable<void> MessageLinkManager::TopologyLoop()
 {
+    constexpr uint16_t __pollIntervalSeconds = 5;
+
     asio::steady_timer timer(ioContext);
     uint64_t heartbeatSequence = 0;
 
-    // 如果配置了 stateRPC，循环会定期调用 StateService 拉最新 message
-    // 节点拓扑；否则就使用本地配置。
+    // State 是 Message 链路拓扑的唯一来源；此处只同步 State 快照，不读取本地节点配置。
     while (!stopping.load(std::memory_order_acquire)) {
-        if (!stateAddress.empty()) {
-            auto snapshot = co_await asio::co_spawn(
-                controlPool, [this]() -> asio::awaitable<TopologySnapshot> { co_return FetchTopology(); },
-                asio::use_awaitable);
-            if (snapshot.changed)
-                ApplyTopology(snapshot);
-        }
+        auto snapshot = co_await asio::co_spawn(
+            controlPool, [this]() -> asio::awaitable<TopologySnapshot> { co_return FetchTopology(); },
+            asio::use_awaitable);
+        if (snapshot.received)
+            SyncTopologyLink(snapshot);
 
         std::vector<std::shared_ptr<MessageLink>> current;
         {
@@ -212,7 +216,7 @@ asio::awaitable<void> MessageLinkManager::TopologyLoop()
                 link->Stop();
         }
 
-        timer.expires_after(std::chrono::seconds(5));
+        timer.expires_after(std::chrono::seconds(__pollIntervalSeconds));
         boost::system::error_code ec;
         co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         if (ec == asio::error::operation_aborted)
@@ -223,12 +227,9 @@ asio::awaitable<void> MessageLinkManager::TopologyLoop()
 MessageLinkManager::TopologySnapshot MessageLinkManager::FetchTopology()
 {
     TopologySnapshot snapshot;
-    if (stateAddress.empty())
-        return snapshot;
     auto channel = grpc::CreateChannel(stateAddress, grpc::InsecureChannelCredentials());
     auto stub = state::StateService::NewStub(channel);
     state::TopologyRequest request;
-    request.set_known_version(topologyVersion.load(std::memory_order_acquire));
     state::MessageTopology response;
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
@@ -237,8 +238,7 @@ MessageLinkManager::TopologySnapshot MessageLinkManager::FetchTopology()
         LOG_WARN(netLogger, "ListMessageNodes failed: {}", status.error_message());
         return snapshot;
     }
-    snapshot.version = response.topology_version();
-    snapshot.changed = snapshot.version != request.known_version();
+    snapshot.received = true;
     for (const auto& source : response.nodes()) {
         if (source.status() != "active" || source.host().empty() || source.port() <= 0)
             continue;
@@ -247,52 +247,30 @@ MessageLinkManager::TopologySnapshot MessageLinkManager::FetchTopology()
     return snapshot;
 }
 
-std::vector<MessageLinkManager::Node> MessageLinkManager::LoadConfiguredNodes() const
+void MessageLinkManager::SyncTopologyLink(const TopologySnapshot& snapshot)
 {
-    std::vector<Node> nodes;
-    auto config = Configer::getNode("server");
-    auto message = config["message"];
-    if (!message || !message["message-total"])
-        return nodes;
-    const int total = message["message-total"].as<int>();
-    for (int i = 1; i <= total; ++i) {
-        auto source = message["m" + std::to_string(i)];
-        if (!source)
-            continue;
-        nodes.push_back(Node{source["name"].as<std::string>(), source["host"].as<std::string>(),
-                             source["streamPort"].as<unsigned short>()});
-    }
-    return nodes;
-}
-
-void MessageLinkManager::ApplyTopology(const TopologySnapshot& snapshot)
-{
-    if (snapshot.changed && snapshot.version != 0)
-        topologyVersion.store(snapshot.version, std::memory_order_release);
-
-    std::unordered_map<std::string, Node> desired;
+    std::unordered_map<std::string, Node> snapshotNodes;
     for (const auto& node : snapshot.nodes)
-        desired[node.id] = node;
+        snapshotNodes[node.id] = node;
 
     std::vector<std::shared_ptr<MessageLink>> removed;
     {
         std::lock_guard<std::mutex> lock(linksMutex);
         for (auto current = links.begin(); current != links.end();) {
-            const auto wanted = desired.find(current->first);
-            const auto configured = configuredNodes.find(current->first);
+            const auto wanted = snapshotNodes.find(current->first);
+            const auto configured = topologyNodes.find(current->first);
             const bool endpointChanged =
-                wanted != desired.end() && configured != configuredNodes.end() &&
+                wanted != snapshotNodes.end() && configured != topologyNodes.end() &&
                 (wanted->second.host != configured->second.host || wanted->second.port != configured->second.port);
-            if (wanted == desired.end() || endpointChanged) {
+            if (wanted == snapshotNodes.end() || endpointChanged) {
                 removed.push_back(current->second);
-                RetireLink(current->second);
-                reconnectAttempts.erase(current->first);
+                AppendPendingDone(current->second);
                 current = links.erase(current);
             } else {
                 ++current;
             }
         }
-        configuredNodes = desired;
+        topologyNodes = snapshotNodes;
     }
     for (auto& link : removed)
         link->Stop();
@@ -310,13 +288,14 @@ void MessageLinkManager::ApplyTopology(const TopologySnapshot& snapshot)
 
 void MessageLinkManager::StartLink(const Node& node)
 {
-    auto link = std::make_shared<MessageLink>(node, gatewayId, instanceId, *this);
+    const std::string token = node.id + ":" + std::to_string(nextLinkToken.fetch_add(1, std::memory_order_relaxed));
+    auto link = std::make_shared<MessageLink>(node, gatewayId, instanceId, token, *this);
     {
         std::lock_guard<std::mutex> lock(linksMutex);
         auto found = links.find(node.id);
         if (found != links.end()) {
             auto old = found->second;
-            RetireLink(old);
+            AppendPendingDone(old);
             old->Stop();
         }
         links[node.id] = link;
@@ -340,14 +319,20 @@ void MessageLinkManager::OnFrame(const std::string& nodeId, const gateway::Messa
                 found = true;
             }
         }
-        if (found && command.deadlineTimer)
-            command.deadlineTimer->cancel();
+        if (found) {
+            if (command.deadlineTimer)
+                command.deadlineTimer->cancel();
+            if (command.attemptTimer)
+                command.attemptTimer->cancel();
+        }
+
         {
             std::lock_guard<std::mutex> lock(linksMutex);
             auto link = links.find(nodeId);
             if (link != links.end())
                 link->second->DecrementInflight();
         }
+
         if (found && command.callback) {
             LOG_DEBUG(businessLogger,
                       "Gateway received Message command result, node: {}, "
@@ -365,18 +350,14 @@ void MessageLinkManager::OnFrame(const std::string& nodeId, const gateway::Messa
         return;
     }
 
-    // RegisterResult 是流进入 healthy 的门禁；拒绝结果保留 unhealthy
-    // 并等待流关闭重连。
+    // RegisterResult 是流进入 healthy 的门禁；拒绝结果保留 unhealthy。
     if (frame.has_register_result()) {
         if (frame.register_result().accepted()) {
-            {
-                std::lock_guard<std::mutex> lock(linksMutex);
-                reconnectAttempts[nodeId] = 0;
-            }
             LOG_INFO(netLogger,
                      "Gateway-Message registration accepted, node: {}, "
                      "message_node_id: {}, stream_epoch: {}",
                      nodeId, frame.register_result().message_node_id(), frame.register_result().stream_epoch());
+            RetryPending();
         } else {
             LOG_ERROR(netLogger,
                       "Gateway-Message registration rejected, node: {}, "
@@ -450,7 +431,7 @@ void MessageLinkManager::OnFrame(const std::string& nodeId, const gateway::Messa
             ack->set_gateway_id(gatewayId);
             ack->set_instance_id(instanceId);
             ack->set_recipient_device_id(frame.client_forward().recipient_device_id());
-            if (!link->Enqueue(std::move(ackFrame))) {
+            if (link->Enqueue(std::move(ackFrame)) != MessageLink::EnqueueResult::Accepted) {
                 LOG_WARN(netLogger,
                          "Gateway failed to enqueue client-forward ACK, node: {}, "
                          "forward_id: {}, status: {}",
@@ -479,46 +460,174 @@ void MessageLinkManager::OnLinkDone(const std::string& nodeId, MessageLink* sour
     asio::post(ioContext, [this, nodeId, source]() {
         if (stopping.load(std::memory_order_acquire))
             return;
-        Node node;
+
+        std::shared_ptr<MessageLink> completed;
         {
             std::lock_guard<std::mutex> lock(linksMutex);
             auto found = links.find(nodeId);
-            if (found == links.end() || found->second.get() != source)
-                return;
-            RetireLink(found->second);
-            links.erase(found);
-            auto configured = configuredNodes.find(nodeId);
-            if (configured == configuredNodes.end())
-                return;
-            node = configured->second;
-        }
-        RetryPending(nodeId);
-        unsigned int attempt = 0;
-        {
-            std::lock_guard<std::mutex> lock(linksMutex);
-            attempt = reconnectAttempts[nodeId]++;
-        }
-        const auto exponent = std::min(attempt, 6U);
-        auto delay = kReconnectBase * (1U << exponent);
-        delay = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(delay),
-                         std::chrono::duration_cast<std::chrono::milliseconds>(kReconnectMaximum));
-        thread_local std::mt19937 random(std::random_device{}());
-        std::uniform_int_distribution<int64_t> jitter(0, std::max<int64_t>(1, delay.count() / 4));
-        delay += std::chrono::milliseconds(jitter(random));
-        auto timer = std::make_shared<asio::steady_timer>(ioContext);
-        timer->expires_after(delay);
-        timer->async_wait([this, node, timer](const boost::system::error_code& ec) {
-            if (ec || stopping.load(std::memory_order_acquire))
-                return;
-            {
-                std::lock_guard<std::mutex> lock(linksMutex);
-                auto configured = configuredNodes.find(node.id);
-                if (configured == configuredNodes.end() || links.contains(node.id) ||
-                    configured->second.host != node.host || configured->second.port != node.port)
+            if (found == links.end() || found->second.get() != source) {
+                auto doneLink =
+                    std::find_if(donePending.begin(), donePending.end(),
+                                 [source](const std::shared_ptr<MessageLink>& link) { return link.get() == source; });
+
+                if (doneLink == donePending.end())
                     return;
+
+                completed = std::move(*doneLink);
+                donePending.erase(doneLink);
+            } else {
+                completed = std::move(found->second);
+                links.erase(found);
             }
-            StartLink(node);
-        });
+        }
+        RetryPending(completed->Token());
+    });
+}
+
+
+void MessageLinkManager::OnLinkWritable()
+{
+    asio::post(ioContext, [this]() {
+        if (stopping.load(std::memory_order_acquire))
+            return;
+
+        RetryPending();
+    });
+}
+
+
+/*
+RetryPending 的实现是以状态节点作为消息链路唯一拓扑来源，不会打破这个约定，关于重传有三个状态区分：
+  - 已成功入队，等待结果；
+  - 尚未入队或当前尝试超时，等待重新选路；
+  - 正在执行重新选路和入队，避免两个事件并发重复调度。
+如果成功写入但超时，不会切换其他链路重传。反之则切换链路重传。
+*/
+void MessageLinkManager::RetryPending(const std::string& failedLinkToken)
+{
+    if (stopping.load(std::memory_order_acquire))
+        return;
+
+    struct RetryCommand {
+        std::string requestId;
+        gateway::CommandEnvelope command;
+        std::unordered_set<std::string> ignoreLinkTokens;
+    };
+
+    std::vector<RetryCommand> retries;
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex);
+        for (auto& [requestId, pendingCommand] : pending) {
+            if (!failedLinkToken.empty()) {
+                const bool canReplaySentCommand = pendingCommand.currentLinkToken == failedLinkToken &&
+                                                  CanReplayCommand(pendingCommand.command.service_id());
+                const bool wasRejectedBeforeEnqueue =
+                    pendingCommand.currentLinkToken == failedLinkToken && pendingCommand.retryPending;
+
+                if (canReplaySentCommand || wasRejectedBeforeEnqueue) {
+                    pendingCommand.ignoredLinkTokens.insert(failedLinkToken);
+                    pendingCommand.retryPending = true;
+                }
+            }
+
+            if (!pendingCommand.retryPending || pendingCommand.retrying)
+                continue;
+
+            pendingCommand.retrying = true;
+
+            auto ignoreLinkTokens = pendingCommand.ignoredLinkTokens;
+            retries.push_back(RetryCommand{requestId, pendingCommand.command, std::move(ignoreLinkTokens)});
+        }
+    }
+
+    bool redispatch = false;
+    for (const auto& retry : retries) {
+        // State 是拓扑唯一来源；重传只从 State 已创建且健康的链路中选择。
+        auto link = SelectLink(retry.command.conversation_id(), retry.ignoreLinkTokens);
+        auto enqueueResult = MessageLink::EnqueueResult::Stopped;
+        bool enqueueAttempted = false;
+
+        if (link && retry.command.deadline_unix_ms() > NowUnixMilliseconds()) {
+            gateway::GatewayToMessageFrame frame;
+            *frame.mutable_command() = retry.command;
+
+            enqueueAttempted = true;
+            enqueueResult = link->Enqueue(std::move(frame));
+            if (enqueueResult == MessageLink::EnqueueResult::Accepted)
+                link->IncrementInflight();
+        }
+
+        std::uint64_t attempt = 0;
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex);
+            auto found = pending.find(retry.requestId);
+            if (found == pending.end() || !found->second.retrying)
+                continue;
+
+            found->second.retrying = false;
+
+            if (enqueueAttempted && enqueueResult == MessageLink::EnqueueResult::Accepted) {
+                found->second.currentLinkToken = link->Token();
+                found->second.retryPending = false;
+                attempt = ++found->second.attempt;
+            } else if (enqueueAttempted) {
+                found->second.retryPending = true;
+
+                if (enqueueResult == MessageLink::EnqueueResult::Stopped)
+                    found->second.ignoredLinkTokens.insert(link->Token());
+
+                redispatch = true;
+            }
+        }
+
+        if (attempt != 0)
+            ArmAttemptTimer(retry.requestId, attempt);
+    }
+
+    if (redispatch)
+        RetryPending();
+}
+
+void MessageLinkManager::OnAttemptTimeout(const std::string& requestId, std::uint64_t attempt)
+{
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex);
+        auto found = pending.find(requestId);
+        if (found == pending.end() || found->second.attempt != attempt ||
+            found->second.command.deadline_unix_ms() <= NowUnixMilliseconds() ||
+            !CanReplayCommand(found->second.command.service_id())) {
+            return;
+        }
+
+        found->second.ignoredLinkTokens.insert(found->second.currentLinkToken);
+        found->second.retryPending = true;
+    }
+
+    RetryPending();
+}
+
+void MessageLinkManager::ArmAttemptTimer(const std::string& requestId, std::uint64_t attempt)
+{
+    std::shared_ptr<asio::steady_timer> timer;
+    int64_t deadline = 0;
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex);
+        auto found = pending.find(requestId);
+        if (found == pending.end() || found->second.attempt != attempt)
+            return;
+
+        timer = found->second.attemptTimer;
+        deadline = found->second.command.deadline_unix_ms();
+    }
+
+    const int64_t remaining = deadline - NowUnixMilliseconds();
+    if (remaining <= 0)
+        return;
+
+    timer->expires_after(std::min(kForwardAttemptTimeout, std::chrono::milliseconds(remaining)));
+    timer->async_wait([this, requestId, attempt](const boost::system::error_code& error) {
+        if (!error)
+            OnAttemptTimeout(requestId, attempt);
     });
 }
 
@@ -530,11 +639,20 @@ void MessageLinkManager::ExpirePending(const std::string& requestId)
         auto found = pending.find(requestId);
         if (found == pending.end())
             return;
+
         expired = std::move(found->second);
         pending.erase(found);
     }
+
+    if (expired.deadlineTimer)
+        expired.deadlineTimer->cancel();
+
+    if (expired.attemptTimer)
+        expired.attemptTimer->cancel();
+
     if (!expired.callback)
         return;
+
     gateway::CommandResult result;
     result.set_request_id(requestId);
     result.set_response_service_id(__getServiceResponseId(ServiceID(expired.command.service_id())));
@@ -545,63 +663,19 @@ void MessageLinkManager::ExpirePending(const std::string& requestId)
     expired.callback(result);
 }
 
-void MessageLinkManager::RetireLink(std::shared_ptr<MessageLink> link)
+void MessageLinkManager::AppendPendingDone(std::shared_ptr<MessageLink> link)
 {
-    retiredLinks.push_back(link);
-    auto timer = std::make_shared<asio::steady_timer>(ioContext);
-    timer->expires_after(std::chrono::seconds(1));
-    timer->async_wait([this, link = std::move(link), timer](const boost::system::error_code&) {
-        std::lock_guard<std::mutex> lock(linksMutex);
-        std::erase(retiredLinks, link);
-    });
+    donePending.push_back(std::move(link));
 }
 
-void MessageLinkManager::RetryPending(const std::string& failedNodeId)
-{
-    std::vector<std::string> requestIds;
-    {
-        std::lock_guard<std::mutex> lock(pendingMutex);
-        for (const auto& [requestId, command] : pending) {
-            if (command.linkId == failedNodeId)
-                requestIds.push_back(requestId);
-        }
-    }
-
-    for (const auto& requestId : requestIds) {
-        PendingCommand failed;
-        {
-            std::lock_guard<std::mutex> lock(pendingMutex);
-            auto found = pending.find(requestId);
-            if (found == pending.end() || found->second.attempts >= 1 ||
-                !CanRetryOnAnotherMessageNode(found->second.command.service_id()))
-                continue;
-            found->second.attempts++;
-            failed = found->second;
-        }
-        if (failed.command.deadline_unix_ms() > 0 && failed.command.deadline_unix_ms() <= NowUnixMilliseconds())
-            continue;
-        auto retry = SelectLink(failed.command.conversation_id(), failedNodeId);
-        if (!retry)
-            continue;
-        gateway::GatewayToMessageFrame frame;
-        *frame.mutable_command() = failed.command;
-        if (retry->Enqueue(std::move(frame))) {
-            retry->IncrementInflight();
-            std::lock_guard<std::mutex> lock(pendingMutex);
-            auto found = pending.find(requestId);
-            if (found != pending.end())
-                found->second.linkId = retry->Id();
-        }
-    }
-}
-
-std::shared_ptr<MessageLink> MessageLinkManager::SelectLink(int64_t conversationId, const std::string& excluded)
+std::shared_ptr<MessageLink> MessageLinkManager::SelectLink(int64_t conversationId,
+                                                            const std::unordered_set<std::string>& ignoredLinkTokens)
 {
     std::vector<std::shared_ptr<MessageLink>> healthy;
     {
         std::lock_guard<std::mutex> lock(linksMutex);
-        for (const auto& [nodeId, link] : links) {
-            if (nodeId != excluded && link->Healthy())
+        for (const auto& [_, link] : links) {
+            if (link->Healthy() && link->Writable() && !ignoredLinkTokens.contains(link->Token()))
                 healthy.push_back(link);
         }
     }

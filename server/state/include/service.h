@@ -26,6 +26,5 @@ class StateServiceImpl final : public StateService::Service
     std::vector<ServiceNodeInfo> gatewayNodes;
     std::vector<ServiceNodeInfo> messageNodes;
     std::atomic<std::size_t> gatewayRouteCount{0};
-    std::uint64_t topologyVersion{1};
 };
 }; // namespace wimi::rpc

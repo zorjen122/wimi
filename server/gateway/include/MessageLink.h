@@ -4,9 +4,9 @@
 
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 
 namespace wimi::connection
@@ -17,23 +17,32 @@ class MessageLinkManager;
 class MessageLink final : public grpc::ClientBidiReactor<gateway::GatewayToMessageFrame, gateway::MessageToGatewayFrame>
 {
   public:
+    enum class EnqueueResult {
+        Accepted,
+        Stopped,
+        QueueFull,
+    };
+
     struct Node {
         std::string id;
         std::string host;
         unsigned short port{0};
     };
 
-    MessageLink(Node node, std::string gatewayId, std::string instanceId, MessageLinkManager& manager);
+    MessageLink(Node node, std::string gatewayId, std::string instanceId, std::string token,
+                MessageLinkManager& manager);
 
     void Start();
     void Stop();
-    bool Enqueue(gateway::GatewayToMessageFrame frame);
+    EnqueueResult Enqueue(gateway::GatewayToMessageFrame frame);
     void Heartbeat(uint64_t sequence);
     bool Healthy() const;
+    bool Writable() const;
     std::size_t Inflight() const;
     void IncrementInflight();
     void DecrementInflight();
     const std::string& Id() const;
+    const std::string& Token() const;
     void Drain();
     int64_t LastReadAt() const;
 
@@ -47,13 +56,14 @@ class MessageLink final : public grpc::ClientBidiReactor<gateway::GatewayToMessa
     Node node;
     std::string gatewayId;
     std::string instanceId;
+    std::string token;
     MessageLinkManager& manager;
     grpc::ClientContext context;
     std::unique_ptr<gateway::GatewayMessageTransport::Stub> stub;
     gateway::MessageToGatewayFrame readFrame;
     gateway::GatewayToMessageFrame writeFrame;
-    std::mutex writeMutex;
-    std::deque<gateway::GatewayToMessageFrame> writeQueue;
+    mutable std::mutex writeMutex;
+    std::queue<gateway::GatewayToMessageFrame> writeQueue;
     bool writeInFlight{false};
     std::atomic<bool> externalHold{false};
     std::atomic<bool> stopped{false};

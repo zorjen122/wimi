@@ -48,8 +48,6 @@ StateServiceImpl::StateServiceImpl()
 
     gatewayNodes = LoadNodes(conf, "connection-gateway", "g", "gateway-total", "port");
     messageNodes = LoadNodes(conf, "message", "m", "message-total", "streamPort");
-    if (conf["topology-version"])
-        topologyVersion = conf["topology-version"].as<std::uint64_t>();
 }
 
 grpc::Status StateServiceImpl::PickConnectionGateway(grpc::ServerContext*, const ConnectUser*, ConnectUserRsp* response)
@@ -71,13 +69,8 @@ grpc::Status StateServiceImpl::PickConnectionGateway(grpc::ServerContext*, const
     return grpc::Status(grpc::StatusCode::UNAVAILABLE, "no active connection gateway");
 }
 
-grpc::Status StateServiceImpl::ListMessageNodes(grpc::ServerContext*, const TopologyRequest* request,
-                                                MessageTopology* response)
+grpc::Status StateServiceImpl::ListMessageNodes(grpc::ServerContext*, const TopologyRequest*, MessageTopology* response)
 {
-    response->set_topology_version(topologyVersion);
-    if (request->known_version() == topologyVersion)
-        return grpc::Status::OK;
-
     for (const auto& node : messageNodes) {
         if (!node.active())
             continue;

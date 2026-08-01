@@ -13,3 +13,4 @@ __pycache__/
 *.out
 compile_commands.json
 docs/.*
+design/

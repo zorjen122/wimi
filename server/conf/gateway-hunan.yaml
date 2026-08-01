@@ -9,12 +9,6 @@ server:
   stateRPC:
     host: 127.0.0.1
     port: 50052
-  message:
-    m1:
-      name: hunan-im
-      host: 127.0.0.1
-      streamPort: 50055
-    message-total: 1
   mysql:
     host: 127.0.0.1
     port: 33060

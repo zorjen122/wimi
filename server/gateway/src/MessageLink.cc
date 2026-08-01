@@ -22,9 +22,10 @@ int64_t NowUnixMilliseconds()
 
 } // namespace
 
-MessageLink::MessageLink(Node node, std::string gatewayId, std::string instanceId, MessageLinkManager& manager)
-    : node(std::move(node)), gatewayId(std::move(gatewayId)), instanceId(std::move(instanceId)), manager(manager),
-      lastReadAt(NowUnixMilliseconds())
+MessageLink::MessageLink(Node node, std::string gatewayId, std::string instanceId, std::string token,
+                         MessageLinkManager& manager)
+    : node(std::move(node)), gatewayId(std::move(gatewayId)), instanceId(std::move(instanceId)),
+      token(std::move(token)), manager(manager), lastReadAt(NowUnixMilliseconds())
 {
     auto channel =
         grpc::CreateChannel(this->node.host + ":" + std::to_string(this->node.port), manager.messageCredentials);
@@ -57,29 +58,37 @@ void MessageLink::Stop()
 {
     if (stopped.exchange(true))
         return;
+
     healthy.store(false, std::memory_order_release);
     context.TryCancel();
     ReleaseHold();
 }
 
-bool MessageLink::Enqueue(gateway::GatewayToMessageFrame frame)
+MessageLink::EnqueueResult MessageLink::Enqueue(gateway::GatewayToMessageFrame frame)
 {
     bool startWrite = false;
+
     {
         std::lock_guard<std::mutex> lock(writeMutex);
-        if (stopped || writeQueue.size() >= kMaxStreamQueue)
-            return false;
-        writeQueue.push_back(std::move(frame));
+        if (stopped)
+            return EnqueueResult::Stopped;
+
+        if (writeQueue.size() >= kMaxStreamQueue)
+            return EnqueueResult::QueueFull;
+
+        writeQueue.push(std::move(frame));
         if (!writeInFlight) {
             writeInFlight = true;
             writeFrame = std::move(writeQueue.front());
-            writeQueue.pop_front();
+            writeQueue.pop();
             startWrite = true;
         }
     }
+
     if (startWrite)
         StartWrite(&writeFrame);
-    return true;
+
+    return EnqueueResult::Accepted;
 }
 
 void MessageLink::Heartbeat(uint64_t sequence)
@@ -93,6 +102,12 @@ void MessageLink::Heartbeat(uint64_t sequence)
 
 bool MessageLink::Healthy() const { return healthy.load(std::memory_order_acquire); }
 
+bool MessageLink::Writable() const
+{
+    std::lock_guard<std::mutex> lock(writeMutex);
+    return !stopped && writeQueue.size() < kMaxStreamQueue;
+}
+
 std::size_t MessageLink::Inflight() const { return inflight.load(std::memory_order_relaxed); }
 
 void MessageLink::IncrementInflight() { inflight.fetch_add(1, std::memory_order_relaxed); }
@@ -105,6 +120,8 @@ void MessageLink::DecrementInflight()
 }
 
 const std::string& MessageLink::Id() const { return node.id; }
+
+const std::string& MessageLink::Token() const { return token; }
 
 void MessageLink::Drain()
 {
@@ -126,8 +143,11 @@ void MessageLink::OnReadDone(bool ok)
     lastReadAt.store(NowUnixMilliseconds(), std::memory_order_relaxed);
     if (readFrame.has_register_result())
         healthy.store(readFrame.register_result().accepted(), std::memory_order_release);
+
+    // 传递给 manager 处理 packet
     manager.OnFrame(node.id, readFrame);
     readFrame.Clear();
+
     StartRead(&readFrame);
 }
 
@@ -140,19 +160,27 @@ void MessageLink::OnWriteDone(bool ok)
         ReleaseHold();
         return;
     }
+
     bool startWrite = false;
+    bool becameWritable = false;
+
     {
         std::lock_guard<std::mutex> lock(writeMutex);
         if (!writeQueue.empty()) {
+            becameWritable = writeQueue.size() == kMaxStreamQueue;
             writeFrame = std::move(writeQueue.front());
-            writeQueue.pop_front();
+            writeQueue.pop();
             startWrite = true;
         } else {
             writeInFlight = false;
         }
     }
+
     if (startWrite)
         StartWrite(&writeFrame);
+
+    if (becameWritable)
+        manager.OnLinkWritable();
 }
 
 void MessageLink::OnDone(const grpc::Status& status)

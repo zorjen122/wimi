@@ -19,7 +19,7 @@ namespace
 constexpr int kHeartbeatIntervalMilliseconds = 20'000;
 constexpr int kReconnectBaseMilliseconds = 200;
 constexpr int kReconnectMaximumMilliseconds = 10'000;
-constexpr int kServerRequestBudgetMilliseconds = 3'000;
+constexpr int kServerRequestBudgetMilliseconds = 10'000;
 
 QString NewRequestId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
@@ -81,6 +81,18 @@ ConnectionGatewayClient::ConnectionGatewayClient(QObject* parent) : QObject(pare
         SendPacket(protocol::PingRequest, ping);
     });
     connect(&reconnect_timer_, &QTimer::timeout, this, &ConnectionGatewayClient::StartSocket);
+}
+
+ConnectionGatewayClient::~ConnectionGatewayClient()
+{
+    desired_open_ = false;
+    QObject::disconnect(&socket_, nullptr, this, nullptr);
+    heartbeat_timer_.stop();
+    reconnect_timer_.stop();
+    for (auto* timer : std::as_const(request_timers_)) {
+        timer->stop();
+    }
+    socket_.abort();
 }
 
 ConnectionGatewayClient::State ConnectionGatewayClient::CurrentState() const { return state_; }
@@ -187,7 +199,7 @@ QString ConnectionGatewayClient::UploadFile(std::int64_t clientSequence, const Q
     packet.setFileName(fileName);
     packet.setFileType(fileType);
     packet.setData(content);
-    return QueueRequest(protocol::UploadFileRequest, std::move(packet), 10'000);
+    return QueueRequest(protocol::UploadFileRequest, std::move(packet), 15'000);
 }
 
 QString ConnectionGatewayClient::CreateGroup(const QString& groupName)

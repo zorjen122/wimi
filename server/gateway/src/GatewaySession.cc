@@ -28,7 +28,7 @@ namespace
 {
 
 constexpr std::size_t kMaxQueuedWrites = PROTOCOL_QUEUE_MAX_SIZE;
-constexpr std::chrono::milliseconds kDefaultRequestTimeout{3000};
+constexpr std::chrono::milliseconds kDefaultRequestTimeout{10'000};
 
 int64_t NowUnixMilliseconds()
 {
@@ -323,12 +323,12 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId, std::str
               requestId, actor, connectionId, lease.generation, protocolId, ServiceName(protocolId), conversationId,
               timeout.count(), expectResponse);
     auto weak = weak_from_this();
-    if (!messageLinks.Forward(std::move(command), [weak, expectResponse, actor, protocolId,
-                                                   requestId](const gateway::CommandResult& result) {
+    if (!(co_await messageLinks.Forward(std::move(command), [weak, expectResponse, actor, protocolId,
+                                                             requestId](const gateway::CommandResult& result) {
             if (auto session = weak.lock()) {
                 session->HandleForwardResult(result, expectResponse, actor, protocolId, requestId);
             }
-        })) {
+        }))) {
         LOG_WARN(netLogger,
                  "Gateway failed to forward command, request_id: {}, uid: {}, "
                  "protocol_id: {}, service: {}, healthy_message_streams: {}",

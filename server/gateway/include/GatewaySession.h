@@ -18,11 +18,11 @@ class CommandResult;
 namespace wimi::connection {
 
 class MessageLinkManager;
-class SessionRegistry;
+class SessionManager;
 
 class GatewaySession : public std::enable_shared_from_this<GatewaySession> {
  public:
-  GatewaySession(boost::asio::ip::tcp::socket socket, SessionRegistry &registry,
+  GatewaySession(boost::asio::ip::tcp::socket socket, SessionManager &registry,
                  MessageLinkManager &messageLinks,
                  boost::asio::thread_pool &businessPool);
 
@@ -33,7 +33,7 @@ class GatewaySession : public std::enable_shared_from_this<GatewaySession> {
   const std::string &ConnectionId() const;
 
  private:
-  struct AuthResult {
+  struct ResultConnecctionRoute {
     int error{ErrorCodes::InternalError};
     TcpPacket response;
     db::SessionLease lease;
@@ -44,7 +44,7 @@ class GatewaySession : public std::enable_shared_from_this<GatewaySession> {
                                             std::string payload);
   boost::asio::awaitable<void> WriteLoop();
   boost::asio::awaitable<bool> RefreshLeaseIfNeeded(int64_t actor);
-  AuthResult Authenticate(TcpPacket request);
+  ResultConnecctionRoute RequestConnectionRoute(TcpPacket request);
   void HandleForwardResult(const gateway::CommandResult &result,
                            bool expectResponse, int64_t actor,
                            uint32_t protocolId, const std::string &requestId);
@@ -56,7 +56,7 @@ class GatewaySession : public std::enable_shared_from_this<GatewaySession> {
 
   boost::asio::ip::tcp::socket socket;
   boost::asio::strand<boost::asio::any_io_executor> strand;
-  SessionRegistry &registry;
+  SessionManager &registry;
   MessageLinkManager &messageLinks;
   boost::asio::thread_pool &businessPool;
   std::string connectionId;

@@ -13,9 +13,9 @@ namespace wimi::connection {
 
 class GatewaySession;
 
-class SessionRegistry {
+class SessionManager {
  public:
-  SessionRegistry(std::string gatewayId, std::string instanceId,
+  SessionManager(std::string gatewayId, std::string instanceId,
                   long leaseTtlSeconds = 60);
 
   db::SessionLease Bind(int64_t uid, const std::string &deviceId,
@@ -37,8 +37,8 @@ class SessionRegistry {
     db::SessionLease lease;
   };
 
-  std::string gatewayId;
-  std::string instanceId;
+  std::string gatewayId;  // 配置文件中定义的网关名
+  std::string instanceId; // 这次 Gateway 进程启动的 UUID
   long leaseTtlSeconds;
   std::mutex mutex;
   std::unordered_map<int64_t, std::unordered_map<std::string, LocalSession>>

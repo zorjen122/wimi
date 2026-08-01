@@ -2,8 +2,8 @@
 
 #include "GatewaySession.h"
 #include "Logger.h"
-#include "MessageLink.h"
-#include "SessionRegistry.h"
+#include "MessageLinkManager.h"
+#include "SessionManager.h"
 
 #include <boost/asio/redirect_error.hpp>
 #include <boost/asio/use_awaitable.hpp>
@@ -13,12 +13,12 @@ namespace wimi::connection {
 namespace asio = boost::asio;
 
 GatewayServer::GatewayServer(asio::io_context &ioContext, unsigned short port,
-                             SessionRegistry &registry,
+                             SessionManager &sessionManager,
                              MessageLinkManager &messageLinks,
                              asio::thread_pool &businessPool)
     : ioContext(ioContext),
       acceptor(ioContext, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
-      registry(registry),
+      manager(sessionManager),
       messageLinks(messageLinks),
       businessPool(businessPool) {
   acceptor.set_option(asio::socket_base::reuse_address(true));
@@ -43,7 +43,7 @@ asio::awaitable<void> GatewayServer::Run() {
       LOG_WARN(netLogger, "Gateway accept failed: {}", ec.message());
       continue;
     }
-    std::make_shared<GatewaySession>(std::move(socket), registry, messageLinks,
+    std::make_shared<GatewaySession>(std::move(socket), manager, messageLinks,
                                      businessPool)
         ->Start();
   }

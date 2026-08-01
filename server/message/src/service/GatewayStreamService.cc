@@ -108,6 +108,8 @@ class GatewayStreamReactor final
     gatewayId = request.gateway_id();
     instanceId = request.instance_id();
     streamEpoch = request.stream_epoch();
+
+    // 更好的方法是在 Redis 里面校验一遍，现在只是判空
     const bool valid =
         request.protocol_version() == 1 && !gatewayId.empty() &&
         !instanceId.empty() && !service.Draining() &&

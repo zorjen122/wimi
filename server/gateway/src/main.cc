@@ -1,10 +1,10 @@
 #include "Configer.h"
 #include "GatewayServer.h"
 #include "Logger.h"
-#include "MessageLink.h"
+#include "MessageLinkManager.h"
 #include "Mysql.h"
 #include "Redis.h"
-#include "SessionRegistry.h"
+#include "SessionManager.h"
 
 #include <boost/asio.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -42,16 +42,16 @@ int main(int argc, char **argv) {
 
   boost::asio::io_context ioContext;
   boost::asio::thread_pool businessPool(4);
-  wimi::connection::SessionRegistry registry(gatewayId, instanceId);
+  wimi::connection::SessionManager sessions(gatewayId, instanceId);
   wimi::connection::MessageLinkManager messageLinks(ioContext, businessPool,
                                                     gatewayId, instanceId);
   messageLinks.SetClientForwardHandler(
-      [&registry](const wimi::gateway::ClientForwardEnvelope &forward) {
-        return registry.Forward(forward);
+      [&sessions](const wimi::gateway::ClientForwardEnvelope &forward) {
+        return sessions.Forward(forward);
       });
   messageLinks.Start();
 
-  wimi::connection::GatewayServer server(ioContext, port, registry,
+  wimi::connection::GatewayServer server(ioContext, port, sessions,
                                          messageLinks, businessPool);
   boost::asio::co_spawn(ioContext, server.Run(), boost::asio::detached);
 

@@ -1,4 +1,4 @@
-#include "SessionRegistry.h"
+#include "SessionManager.h"
 
 #include "GatewaySession.h"
 #include "Logger.h"
@@ -8,13 +8,13 @@
 
 namespace wimi::connection {
 
-SessionRegistry::SessionRegistry(std::string gatewayId, std::string instanceId,
+SessionManager::SessionManager(std::string gatewayId, std::string instanceId,
                                  long leaseTtlSeconds)
     : gatewayId(std::move(gatewayId)),
       instanceId(std::move(instanceId)),
       leaseTtlSeconds(leaseTtlSeconds) {}
 
-db::SessionLease SessionRegistry::Bind(
+db::SessionLease SessionManager::Bind(
     int64_t uid, const std::string &deviceId,
     const std::shared_ptr<GatewaySession> &session) {
   db::SessionLease lease;
@@ -43,13 +43,13 @@ db::SessionLease SessionRegistry::Bind(
   return lease;
 }
 
-bool SessionRegistry::Refresh(int64_t uid, const std::string &deviceId,
+bool SessionManager::Refresh(int64_t uid, const std::string &deviceId,
                               const db::SessionLease &lease) {
   return db::RedisDao::GetInstance()->refreshSessionLease(uid, deviceId, lease,
                                                           leaseTtlSeconds);
 }
 
-void SessionRegistry::Remove(int64_t uid, const std::string &deviceId,
+void SessionManager::Remove(int64_t uid, const std::string &deviceId,
                              const std::shared_ptr<GatewaySession> &session,
                              const db::SessionLease &lease) {
   {
@@ -70,7 +70,7 @@ void SessionRegistry::Remove(int64_t uid, const std::string &deviceId,
   db::RedisDao::GetInstance()->clearSessionLease(uid, deviceId, lease);
 }
 
-gateway::ClientForwardStatus SessionRegistry::Forward(
+gateway::ClientForwardStatus SessionManager::Forward(
     const gateway::ClientForwardEnvelope &forward) {
   std::shared_ptr<GatewaySession> session;
   db::SessionLease lease;
@@ -112,11 +112,11 @@ gateway::ClientForwardStatus SessionRegistry::Forward(
   return gateway::CLIENT_FORWARD_STATUS_QUEUED;
 }
 
-const std::string &SessionRegistry::GatewayId() const {
+const std::string &SessionManager::GatewayId() const {
   return gatewayId;
 }
 
-const std::string &SessionRegistry::InstanceId() const {
+const std::string &SessionManager::InstanceId() const {
   return instanceId;
 }
 

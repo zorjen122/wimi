@@ -3,9 +3,9 @@
 #include "Const.h"
 #include "DbGlobal.h"
 #include "Logger.h"
-#include "MessageLink.h"
+#include "MessageLinkManager.h"
 #include "Mysql.h"
-#include "SessionRegistry.h"
+#include "SessionManager.h"
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/read.hpp>
@@ -59,7 +59,7 @@ std::shared_ptr<std::string> EncodeFrame(uint32_t protocolId,
 }  // namespace
 
 GatewaySession::GatewaySession(asio::ip::tcp::socket socket,
-                               SessionRegistry &registry,
+                               SessionManager &registry,
                                MessageLinkManager &messageLinks,
                                asio::thread_pool &businessPool)
     : socket(std::move(socket)),
@@ -211,8 +211,8 @@ asio::awaitable<void> GatewaySession::HandlePacket(uint32_t protocolId,
         businessPool,
         [this, self = shared_from_this(),
          request =
-             std::move(request)]() mutable -> asio::awaitable<AuthResult> {
-          co_return Authenticate(std::move(request));
+             std::move(request)]() mutable -> asio::awaitable<ResultConnecctionRoute> {
+          co_return RequestConnectionRoute(std::move(request));
         },
         asio::use_awaitable);
     if (result.error == ErrorCodes::Success) {
@@ -443,8 +443,8 @@ asio::awaitable<void> GatewaySession::WriteLoop() {
     CloseInContext();
 }
 
-GatewaySession::AuthResult GatewaySession::Authenticate(TcpPacket request) {
-  AuthResult result;
+GatewaySession::ResultConnecctionRoute GatewaySession::RequestConnectionRoute(TcpPacket request) {
+  ResultConnecctionRoute result;
   const int64_t uid = request.uid();
   if (uid <= 0 || !request.has_device_id() || request.device_id().empty() ||
       request.device_id().size() > 36 || !request.has_auth_token() ||

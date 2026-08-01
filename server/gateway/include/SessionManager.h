@@ -9,40 +9,36 @@
 #include <string>
 #include <unordered_map>
 
-namespace wimi::connection {
+namespace wimi::connection
+{
 
 class GatewaySession;
 
-class SessionManager {
- public:
-  SessionManager(std::string gatewayId, std::string instanceId,
-                  long leaseTtlSeconds = 60);
+class SessionManager
+{
+  public:
+    SessionManager(std::string gatewayId, std::string instanceId, long leaseTtlSeconds = 60);
 
-  db::SessionLease Bind(int64_t uid, const std::string &deviceId,
-                        const std::shared_ptr<GatewaySession> &session);
-  bool Refresh(int64_t uid, const std::string &deviceId,
-               const db::SessionLease &lease);
-  void Remove(int64_t uid, const std::string &deviceId,
-              const std::shared_ptr<GatewaySession> &session,
-              const db::SessionLease &lease);
-  gateway::ClientForwardStatus Forward(
-      const gateway::ClientForwardEnvelope &forward);
+    db::SessionLease Bind(int64_t uid, const std::string& deviceId, const std::shared_ptr<GatewaySession>& session);
+    bool Refresh(int64_t uid, const std::string& deviceId, const db::SessionLease& lease);
+    void Remove(int64_t uid, const std::string& deviceId, const std::shared_ptr<GatewaySession>& session,
+                const db::SessionLease& lease);
+    gateway::ClientForwardStatus Forward(const gateway::ClientForwardEnvelope& forward);
 
-  const std::string &GatewayId() const;
-  const std::string &InstanceId() const;
+    const std::string& GatewayId() const;
+    const std::string& InstanceId() const;
 
- private:
-  struct LocalSession {
-    std::weak_ptr<GatewaySession> session;
-    db::SessionLease lease;
-  };
+  private:
+    struct LocalSession {
+        std::weak_ptr<GatewaySession> session;
+        db::SessionLease lease;
+    };
 
-  std::string gatewayId;  // 配置文件中定义的网关名
-  std::string instanceId; // 这次 Gateway 进程启动的 UUID
-  long leaseTtlSeconds;
-  std::mutex mutex;
-  std::unordered_map<int64_t, std::unordered_map<std::string, LocalSession>>
-      sessions;
+    std::string gatewayId;  // 配置文件中定义的网关名
+    std::string instanceId; // 这次 Gateway 进程启动的 UUID
+    long leaseTtlSeconds;
+    std::mutex mutex;
+    std::unordered_map<int64_t, std::unordered_map<std::string, LocalSession>> sessions;
 };
 
-}  // namespace wimi::connection
+} // namespace wimi::connection

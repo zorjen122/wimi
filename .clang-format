@@ -1,16 +1,30 @@
-BasedOnStyle: Google
+# 以 LLVM 风格作为未显式配置项的默认基础。
+BasedOnStyle: LLVM
+# 此配置仅应用于 C++ 源文件。
 Language: Cpp
-Standard: c++17
-ColumnLimit: 80
-IndentWidth: 2
-TabWidth: 2
+# 使用 C++20 语言标准解析和格式化代码。
+Standard: c++20
+# 每行最大字符数为 120，超出时按规则换行。
+ColumnLimit: 120
+# 每级缩进使用 4 个空格。
+IndentWidth: 4
+# 制表符显示宽度为 4 个字符。
+TabWidth: 4
+# 不使用制表符缩进，统一使用空格。
 UseTab: Never
-BreakBeforeBraces: Attach
-AllowShortFunctionsOnASingleLine: Empty
+# 对不同代码结构分别设置左花括号的换行规则。
+BreakBeforeBraces: Linux
+# 不允许短 if 语句写在同一行。
 AllowShortIfStatementsOnASingleLine: Never
+# 不允许短循环语句写在同一行。
 AllowShortLoopsOnASingleLine: false
+# 不根据现有代码自动推导指针对齐方式。
 DerivePointerAlignment: false
-PointerAlignment: Right
+# 指针星号对齐方向。
+PointerAlignment: Left
+# 保持现有 include 的排序，不自动重排。
 SortIncludes: false
+# 保留现有 include 分组，不自动合并或拆分。
 IncludeBlocks: Preserve
+# namespace 内的内容不额外缩进。
 NamespaceIndentation: None

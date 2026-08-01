@@ -4,28 +4,30 @@
 #include <QString>
 #include <QVector>
 
-namespace wimi::client {
+namespace wimi::client
+{
 
 struct TcpFrame {
-  quint32 serviceId{};
-  QByteArray payload;
+    quint32 serviceId{};
+    QByteArray payload;
 };
 
-class TcpFrameCodec final {
- public:
-  static constexpr quint32 kHeaderSize = 8;
-  static constexpr quint32 kMaximumPayloadSize = 10 * 1024 * 1024;
+class TcpFrameCodec final
+{
+  public:
+    static constexpr quint32 kHeaderSize = 8;
+    static constexpr quint32 kMaximumPayloadSize = 10 * 1024 * 1024;
 
-  static QByteArray Encode(quint32 serviceId, const QByteArray &payload);
+    static QByteArray Encode(quint32 serviceId, const QByteArray& payload);
 
-  QVector<TcpFrame> Feed(const QByteArray &bytes);
-  bool HasError() const;
-  QString ErrorString() const;
-  void Reset();
+    QVector<TcpFrame> Feed(const QByteArray& bytes);
+    bool HasError() const;
+    QString ErrorString() const;
+    void Reset();
 
- private:
-  QByteArray buffer_;
-  QString error_;
+  private:
+    QByteArray buffer_;
+    QString error_;
 };
 
-}  // namespace wimi::client
+} // namespace wimi::client

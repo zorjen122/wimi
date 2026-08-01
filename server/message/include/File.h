@@ -7,4 +7,4 @@
 
 enum class FileType { PNG, JPEG, PDF, ZIP, GZIP, Unknown };
 
-FileType ParseFileType(const std::string &filePath);
+FileType ParseFileType(const std::string& filePath);

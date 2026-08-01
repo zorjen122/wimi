@@ -6,118 +6,109 @@
 
 #include <utility>
 
-namespace wimi::connection {
+namespace wimi::connection
+{
 
-SessionManager::SessionManager(std::string gatewayId, std::string instanceId,
-                                 long leaseTtlSeconds)
-    : gatewayId(std::move(gatewayId)),
-      instanceId(std::move(instanceId)),
-      leaseTtlSeconds(leaseTtlSeconds) {}
-
-db::SessionLease SessionManager::Bind(
-    int64_t uid, const std::string &deviceId,
-    const std::shared_ptr<GatewaySession> &session) {
-  db::SessionLease lease;
-  lease.deviceId = deviceId;
-  lease.gatewayId = gatewayId;
-  lease.instanceId = instanceId;
-  lease.connectionId = session->ConnectionId();
-  lease.generation = db::RedisDao::GetInstance()->bindSessionLease(
-      uid, deviceId, gatewayId, instanceId, lease.connectionId,
-      leaseTtlSeconds);
-  if (lease.generation <= 0)
-    return {};
-
-  // rebind 会话，如果旧的会话存在，目前的规则是直接关闭旧的会话（没有明确通知）
-  std::shared_ptr<GatewaySession> oldSession;
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    auto &userSessions = sessions[uid];
-    auto found = userSessions.find(deviceId);
-    if (found != userSessions.end())
-      oldSession = found->second.session.lock();
-    userSessions[deviceId] = LocalSession{session, lease};
-  }
-  if (oldSession && oldSession != session)
-    oldSession->Close();
-  return lease;
+SessionManager::SessionManager(std::string gatewayId, std::string instanceId, long leaseTtlSeconds)
+    : gatewayId(std::move(gatewayId)), instanceId(std::move(instanceId)), leaseTtlSeconds(leaseTtlSeconds)
+{
 }
 
-bool SessionManager::Refresh(int64_t uid, const std::string &deviceId,
-                              const db::SessionLease &lease) {
-  return db::RedisDao::GetInstance()->refreshSessionLease(uid, deviceId, lease,
-                                                          leaseTtlSeconds);
+db::SessionLease SessionManager::Bind(int64_t uid, const std::string& deviceId,
+                                      const std::shared_ptr<GatewaySession>& session)
+{
+    db::SessionLease lease;
+    lease.deviceId = deviceId;
+    lease.gatewayId = gatewayId;
+    lease.instanceId = instanceId;
+    lease.connectionId = session->ConnectionId();
+    lease.generation = db::RedisDao::GetInstance()->bindSessionLease(uid, deviceId, gatewayId, instanceId,
+                                                                     lease.connectionId, leaseTtlSeconds);
+    if (lease.generation <= 0)
+        return {};
+
+    // rebind 会话，如果旧的会话存在，目前的规则是直接关闭旧的会话（没有明确通知）
+    std::shared_ptr<GatewaySession> oldSession;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto& userSessions = sessions[uid];
+        auto found = userSessions.find(deviceId);
+        if (found != userSessions.end())
+            oldSession = found->second.session.lock();
+        userSessions[deviceId] = LocalSession{session, lease};
+    }
+    if (oldSession && oldSession != session)
+        oldSession->Close();
+    return lease;
 }
 
-void SessionManager::Remove(int64_t uid, const std::string &deviceId,
-                             const std::shared_ptr<GatewaySession> &session,
-                             const db::SessionLease &lease) {
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    auto found = sessions.find(uid);
-    if (found == sessions.end())
-      return;
-    auto device = found->second.find(deviceId);
-    if (device == found->second.end())
-      return;
-    auto current = device->second.session.lock();
-    if (current && current != session)
-      return;
-    found->second.erase(device);
-    if (found->second.empty())
-      sessions.erase(found);
-  }
-  db::RedisDao::GetInstance()->clearSessionLease(uid, deviceId, lease);
+bool SessionManager::Refresh(int64_t uid, const std::string& deviceId, const db::SessionLease& lease)
+{
+    return db::RedisDao::GetInstance()->refreshSessionLease(uid, deviceId, lease, leaseTtlSeconds);
 }
 
-gateway::ClientForwardStatus SessionManager::Forward(
-    const gateway::ClientForwardEnvelope &forward) {
-  std::shared_ptr<GatewaySession> session;
-  db::SessionLease lease;
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    auto user = sessions.find(forward.recipient_uid());
-    if (user == sessions.end())
-      return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
-    auto found = user->second.find(forward.recipient_device_id());
-    if (found == user->second.end())
-      return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
-    session = found->second.session.lock();
-    lease = found->second.lease;
-  }
-
-  if (!session)
-    return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
-
-  /*
-    Message Core 查询在线 lease 后，把它当时看到的连接身份写入
-    ClientForwardEnvelope。Gateway 在真正写 socket 前，要求本地当前 session 的
-    connectionId 和 generation 都完全一致；不一致就返回 STALE_ROUTE，不投递。
-    未来可以考虑投递，不然导致了一个用户的消息（如通知）无法及时收到，只因为它的连接身份变了。
-    目前一般来说，对于可持久化消息是不会丢的，它存放在 Mysql 存储表中。
-  */
-  if (lease.connectionId != forward.expected_connection_id() ||
-      lease.generation != forward.expected_connection_generation())
-    return gateway::CLIENT_FORWARD_STATUS_STALE_ROUTE;
-  TcpPacket packet;
-  const bool hasTransportSequence = ParseTcpPacket(forward.packet(), packet) &&
-                                    packet.has_seq() && packet.seq() > 0;
-  const bool queued =
-      hasTransportSequence
-          ? session->SendReliable(forward.packet(), forward.protocol_id(),
-                                  packet.seq())
-          : session->SendRaw(forward.packet(), forward.protocol_id());
-  if (!queued)
-    return gateway::CLIENT_FORWARD_STATUS_BACKPRESSURED;
-  return gateway::CLIENT_FORWARD_STATUS_QUEUED;
+void SessionManager::Remove(int64_t uid, const std::string& deviceId, const std::shared_ptr<GatewaySession>& session,
+                            const db::SessionLease& lease)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto found = sessions.find(uid);
+        if (found == sessions.end())
+            return;
+        auto device = found->second.find(deviceId);
+        if (device == found->second.end())
+            return;
+        auto current = device->second.session.lock();
+        if (current && current != session)
+            return;
+        found->second.erase(device);
+        if (found->second.empty())
+            sessions.erase(found);
+    }
+    db::RedisDao::GetInstance()->clearSessionLease(uid, deviceId, lease);
 }
 
-const std::string &SessionManager::GatewayId() const {
-  return gatewayId;
+gateway::ClientForwardStatus SessionManager::Forward(const gateway::ClientForwardEnvelope& forward)
+{
+    std::shared_ptr<GatewaySession> session;
+    db::SessionLease lease;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto user = sessions.find(forward.recipient_uid());
+        if (user == sessions.end())
+            return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
+        auto found = user->second.find(forward.recipient_device_id());
+        if (found == user->second.end())
+            return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
+        session = found->second.session.lock();
+        lease = found->second.lease;
+    }
+
+    if (!session)
+        return gateway::CLIENT_FORWARD_STATUS_OFFLINE;
+
+    /*
+      Message Core 查询在线 lease 后，把它当时看到的连接身份写入
+      ClientForwardEnvelope。Gateway 在真正写 socket 前，要求本地当前 session 的
+      connectionId 和 generation 都完全一致；不一致就返回 STALE_ROUTE，不投递。
+      未来可以考虑投递，不然导致了一个用户的消息（如通知）无法及时收到，只因为它的连接身份变了。
+      目前一般来说，对于可持久化消息是不会丢的，它存放在 Mysql 存储表中。
+    */
+    if (lease.connectionId != forward.expected_connection_id() ||
+        lease.generation != forward.expected_connection_generation())
+        return gateway::CLIENT_FORWARD_STATUS_STALE_ROUTE;
+    TcpPacket packet;
+    const bool hasTransportSequence = ParseTcpPacket(forward.packet(), packet) && packet.has_seq() && packet.seq() > 0;
+    const bool queued = hasTransportSequence
+                            ? session->SendReliable(forward.packet(), forward.protocol_id(), packet.seq())
+                            : session->SendRaw(forward.packet(), forward.protocol_id());
+    if (!queued)
+        return gateway::CLIENT_FORWARD_STATUS_BACKPRESSURED;
+    return gateway::CLIENT_FORWARD_STATUS_QUEUED;
 }
 
-const std::string &SessionManager::InstanceId() const {
-  return instanceId;
-}
+const std::string& SessionManager::GatewayId() const { return gatewayId; }
 
-}  // namespace wimi::connection
+const std::string& SessionManager::InstanceId() const { return instanceId; }
+
+} // namespace wimi::connection

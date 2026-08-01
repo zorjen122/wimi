@@ -9,44 +9,38 @@
 #include <boost/asio/use_awaitable.hpp>
 #include <chrono>
 
-namespace wimi::connection {
+namespace wimi::connection
+{
 namespace asio = boost::asio;
 
-GatewayServer::GatewayServer(asio::io_context &ioContext, unsigned short port,
-                             SessionManager &sessionManager,
-                             MessageLinkManager &messageLinks,
-                             asio::thread_pool &businessPool)
-    : ioContext(ioContext),
-      acceptor(ioContext, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
-      manager(sessionManager),
-      messageLinks(messageLinks),
-      businessPool(businessPool) {
-  acceptor.set_option(asio::socket_base::reuse_address(true));
+GatewayServer::GatewayServer(asio::io_context& ioContext, unsigned short port, SessionManager& sessionManager,
+                             MessageLinkManager& messageLinks, asio::thread_pool& businessPool)
+    : ioContext(ioContext), acceptor(ioContext, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+      manager(sessionManager), messageLinks(messageLinks), businessPool(businessPool)
+{
+    acceptor.set_option(asio::socket_base::reuse_address(true));
 }
 
-asio::awaitable<void> GatewayServer::Run() {
-  asio::steady_timer readinessTimer(ioContext);
-  while (!messageLinks.Ready()) {
-    readinessTimer.expires_after(std::chrono::milliseconds(100));
-    co_await readinessTimer.async_wait(asio::use_awaitable);
-  }
-  LOG_INFO(netLogger, "Connection Gateway is ready, message streams: {}",
-           messageLinks.HealthyLinkCount());
-
-  while (acceptor.is_open()) {
-    boost::system::error_code ec;
-    auto socket = co_await acceptor.async_accept(
-        asio::redirect_error(asio::use_awaitable, ec));
-    if (ec) {
-      if (ec == asio::error::operation_aborted)
-        co_return;
-      LOG_WARN(netLogger, "Gateway accept failed: {}", ec.message());
-      continue;
+asio::awaitable<void> GatewayServer::Run()
+{
+    asio::steady_timer readinessTimer(ioContext);
+    while (!messageLinks.Ready()) {
+        readinessTimer.expires_after(std::chrono::milliseconds(100));
+        co_await readinessTimer.async_wait(asio::use_awaitable);
     }
-    std::make_shared<GatewaySession>(std::move(socket), manager, messageLinks,
-                                     businessPool)
-        ->Start();
-  }
+    LOG_INFO(netLogger, "Connection Gateway is ready, message streams: {}", messageLinks.HealthyLinkCount());
+
+    while (acceptor.is_open()) {
+        boost::system::error_code ec;
+        auto socket = co_await acceptor.async_accept(asio::redirect_error(asio::use_awaitable, ec));
+        if (ec) {
+            if (ec == asio::error::operation_aborted)
+                co_return;
+            LOG_WARN(netLogger, "Gateway accept failed: {}", ec.message());
+            continue;
+        }
+        std::make_shared<GatewaySession>(std::move(socket), manager, messageLinks, businessPool)->Start();
+    }
 }
 
-}  // namespace wimi::connection
+} // namespace wimi::connection

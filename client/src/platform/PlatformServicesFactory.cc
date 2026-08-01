@@ -4,32 +4,30 @@
 #include "platform/linux/LinuxDesktopServices.h"
 #endif
 
-namespace wimi::client {
-namespace {
+namespace wimi::client
+{
+namespace
+{
 
-class UnsupportedPlatformServices final : public IPlatformServices {
- public:
-  QString PlatformName() const override {
-    return QStringLiteral("unsupported");
-  }
+class UnsupportedPlatformServices final : public IPlatformServices
+{
+  public:
+    QString PlatformName() const override { return QStringLiteral("unsupported"); }
 
-  bool DesktopNotificationsAvailable() const override {
-    return false;
-  }
+    bool DesktopNotificationsAvailable() const override { return false; }
 
-  bool ShowDesktopNotification(const QString &, const QString &) override {
-    return false;
-  }
+    bool ShowDesktopNotification(const QString&, const QString&) override { return false; }
 };
 
-}  // namespace
+} // namespace
 
-std::unique_ptr<IPlatformServices> CreatePlatformServices() {
+std::unique_ptr<IPlatformServices> CreatePlatformServices()
+{
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
-  return std::make_unique<LinuxDesktopServices>();
+    return std::make_unique<LinuxDesktopServices>();
 #else
-  return std::make_unique<UnsupportedPlatformServices>();
+    return std::make_unique<UnsupportedPlatformServices>();
 #endif
 }
 
-}  // namespace wimi::client
+} // namespace wimi::client

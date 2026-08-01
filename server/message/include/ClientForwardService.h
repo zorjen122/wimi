@@ -4,22 +4,23 @@
 #include <cstdint>
 #include <string>
 
-namespace wimi {
+namespace wimi
+{
 
-namespace rpc {
+namespace rpc
+{
 class GatewayStreamService;
 }
 
-class ClientForwardService {
- public:
-  void SetGatewayStreamService(rpc::GatewayStreamService *service);
-  bool ForwardToGateway(int64_t uid, const std::string &packet,
-                        uint32_t protocolId, int64_t forwardId = 0,
-                        int64_t messageId = 0, int64_t conversationId = 0,
-                        int64_t conversationSeq = 0) const;
+class ClientForwardService
+{
+  public:
+    void SetGatewayStreamService(rpc::GatewayStreamService* service);
+    bool ForwardToGateway(int64_t uid, const std::string& packet, uint32_t protocolId, int64_t forwardId = 0,
+                          int64_t messageId = 0, int64_t conversationId = 0, int64_t conversationSeq = 0) const;
 
- private:
-  std::atomic<rpc::GatewayStreamService *> gatewayStreamService{nullptr};
+  private:
+    std::atomic<rpc::GatewayStreamService*> gatewayStreamService{nullptr};
 };
 
-}  // namespace wimi
+} // namespace wimi

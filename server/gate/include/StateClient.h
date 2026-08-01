@@ -10,33 +10,36 @@ using ::grpc::Channel;
 using ::grpc::ClientContext;
 using ::grpc::Status;
 
-namespace wimi::rpc {
+namespace wimi::rpc
+{
 using ::state::ConnectUser;
 
 using ::state::ConnectUserRsp;
 using ::state::StateService;
 
-class ServerNode {
- public:
-  ServerNode() = default;
-  ServerNode(std::string ip, int port, std::string nodeId = {})
-      : ip(std::move(ip)), port(port), nodeId(std::move(nodeId)) {}
+class ServerNode
+{
+  public:
+    ServerNode() = default;
+    ServerNode(std::string ip, int port, std::string nodeId = {})
+        : ip(std::move(ip)), port(port), nodeId(std::move(nodeId))
+    {
+    }
 
-  bool empty() {
-    return ip.empty() || port == 0;
-  }
-  std::string ip;
-  unsigned short port;
-  std::string nodeId;
+    bool empty() { return ip.empty() || port == 0; }
+    std::string ip;
+    unsigned short port;
+    std::string nodeId;
 };
 
-class StateClient : public Singleton<StateClient> {
- public:
-  ServerNode PickConnectionGateway(int uid);
-  StateClient();
+class StateClient : public Singleton<StateClient>
+{
+  public:
+    ServerNode PickConnectionGateway(int uid);
+    StateClient();
 
- private:
-  std::unique_ptr<RpcPool<StateService>> rpcPool = nullptr;
+  private:
+    std::unique_ptr<RpcPool<StateService>> rpcPool = nullptr;
 };
 
-};  // namespace wimi::rpc
+}; // namespace wimi::rpc

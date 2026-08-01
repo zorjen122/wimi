@@ -14,48 +14,50 @@
 #include "TcpMessageCodec.h"
 #include "ThreadPool.h"
 
-namespace wimi {
+namespace wimi
+{
 
-namespace rpc {
+namespace rpc
+{
 class GatewayStreamService;
 }
 
-class Service : public Singleton<Service> {
-  friend class Singleton<Service>;
+class Service : public Singleton<Service>
+{
+    friend class Singleton<Service>;
 
- public:
-  using HandleType = std::function<TcpPacket(uint32_t, TcpPacket &)>;
+  public:
+    using HandleType = std::function<TcpPacket(uint32_t, TcpPacket&)>;
 
-  ~Service();
-  bool PostBackgroundTask(ThreadPool::Task task);
-  ClientForwardService &ClientForwards();
-  MessageService &Messages();
-  void SetGatewayStreamService(rpc::GatewayStreamService *service);
-  TcpPacket ExecuteGatewayCommand(uint32_t msgID, int64_t actorUid,
-                                  TcpPacket request);
+    ~Service();
+    bool PostBackgroundTask(ThreadPool::Task task);
+    ClientForwardService& ClientForwards();
+    MessageService& Messages();
+    void SetGatewayStreamService(rpc::GatewayStreamService* service);
+    TcpPacket ExecuteGatewayCommand(uint32_t msgID, int64_t actorUid, TcpPacket request);
 
- private:
-  enum class TaskType { Light, Heavy };
-  struct HandlerEntry {
-    HandleType handle;
-    TaskType taskType{TaskType::Heavy};
-  };
+  private:
+    enum class TaskType { Light, Heavy };
+    struct HandlerEntry {
+        HandleType handle;
+        TaskType taskType{TaskType::Heavy};
+    };
 
-  Service();
-  void Init();
-  void RegisterHandle(uint32_t msgID, TaskType taskType, HandleType handle);
+    Service();
+    void Init();
+    void RegisterHandle(uint32_t msgID, TaskType taskType, HandleType handle);
 
-  ClientForwardService clientForwardService;
-  FriendService friendService;
-  GroupService groupService;
-  MessageService messageService;
-  FileService fileService;
-  std::unique_ptr<ThreadPool> threadPool;
-  std::atomic<uint64_t> lightDispatched{0};
-  std::atomic<uint64_t> heavyDispatched{0};
-  std::atomic<uint64_t> heavyRejected{0};
-  std::chrono::milliseconds requestTimeout{3000};
-  std::chrono::milliseconds queueAcquireTimeout{2};
-  std::map<uint32_t, HandlerEntry> serviceGroup;
+    ClientForwardService clientForwardService;
+    FriendService friendService;
+    GroupService groupService;
+    MessageService messageService;
+    FileService fileService;
+    std::unique_ptr<ThreadPool> threadPool;
+    std::atomic<uint64_t> lightDispatched{0};
+    std::atomic<uint64_t> heavyDispatched{0};
+    std::atomic<uint64_t> heavyRejected{0};
+    std::chrono::milliseconds requestTimeout{3000};
+    std::chrono::milliseconds queueAcquireTimeout{2};
+    std::map<uint32_t, HandlerEntry> serviceGroup;
 };
-};  // namespace wimi
+}; // namespace wimi

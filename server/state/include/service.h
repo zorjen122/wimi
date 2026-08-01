@@ -5,27 +5,27 @@
 
 #include <atomic>
 
-namespace wimi::rpc {
+namespace wimi::rpc
+{
 using state::ConnectUser;
 using state::ConnectUserRsp;
 using state::MessageTopology;
 using state::StateService;
 using state::TopologyRequest;
 
-class StateServiceImpl final : public StateService::Service {
- public:
-  StateServiceImpl();
-  grpc::Status PickConnectionGateway(grpc::ServerContext *context,
-                                     const ConnectUser *request,
-                                     ConnectUserRsp *response) override;
+class StateServiceImpl final : public StateService::Service
+{
+  public:
+    StateServiceImpl();
+    grpc::Status PickConnectionGateway(grpc::ServerContext* context, const ConnectUser* request,
+                                       ConnectUserRsp* response) override;
 
-  grpc::Status ListMessageNodes(grpc::ServerContext *context,
-                                const TopologyRequest *request,
-                                MessageTopology *response) override;
+    grpc::Status ListMessageNodes(grpc::ServerContext* context, const TopologyRequest* request,
+                                  MessageTopology* response) override;
 
-  std::vector<ServiceNodeInfo> gatewayNodes;
-  std::vector<ServiceNodeInfo> messageNodes;
-  std::atomic<std::size_t> gatewayRouteCount{0};
-  std::uint64_t topologyVersion{1};
+    std::vector<ServiceNodeInfo> gatewayNodes;
+    std::vector<ServiceNodeInfo> messageNodes;
+    std::atomic<std::size_t> gatewayRouteCount{0};
+    std::uint64_t topologyVersion{1};
 };
-};  // namespace wimi::rpc
+}; // namespace wimi::rpc

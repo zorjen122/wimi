@@ -2,11 +2,13 @@
 
 #include "TcpMessageCodec.h"
 
-namespace wimi {
+namespace wimi
+{
 
-class FileService {
- public:
-  TcpPacket Upload(uint32_t msgID, TcpPacket &request);
+class FileService
+{
+  public:
+    TcpPacket Upload(uint32_t msgID, TcpPacket& request);
 };
 
-}  // namespace wimi
+} // namespace wimi

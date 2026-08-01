@@ -11,172 +11,142 @@
 #include <thread>
 #include <utility>
 
-namespace wimi {
-namespace {
+namespace wimi
+{
+namespace
+{
 
-std::size_t ResolveServiceWorkerCount() {
-  if (const char *value = std::getenv("WIMI_CHAT_SERVICE_WORKERS")) {
-    int configured = std::atoi(value);
-    if (configured > 0) {
-      return static_cast<std::size_t>(configured);
+std::size_t ResolveServiceWorkerCount()
+{
+    if (const char* value = std::getenv("WIMI_CHAT_SERVICE_WORKERS")) {
+        int configured = std::atoi(value);
+        if (configured > 0) {
+            return static_cast<std::size_t>(configured);
+        }
     }
-  }
 
-  std::size_t hardware = std::thread::hardware_concurrency();
-  if (hardware == 0) {
-    hardware = 4;
-  }
-  return std::clamp<std::size_t>(hardware / 2, 2, 8);
-}
-
-std::chrono::milliseconds ResolvePositiveMilliseconds(const char *name,
-                                                      int fallback) {
-  if (const char *value = std::getenv(name)) {
-    int configured = std::atoi(value);
-    if (configured > 0) {
-      return std::chrono::milliseconds(configured);
+    std::size_t hardware = std::thread::hardware_concurrency();
+    if (hardware == 0) {
+        hardware = 4;
     }
-  }
-  return std::chrono::milliseconds(fallback);
+    return std::clamp<std::size_t>(hardware / 2, 2, 8);
 }
 
-}  // namespace
-
-Service::Service()
-    : friendService(clientForwardService), groupService(clientForwardService) {
-  Init();
-  requestTimeout =
-      ResolvePositiveMilliseconds("WIMI_CHAT_REQUEST_TIMEOUT_MS", 3000);
-  queueAcquireTimeout =
-      ResolvePositiveMilliseconds("WIMI_CHAT_QUEUE_ACQUIRE_MS", 2);
-  threadPool =
-      std::make_unique<ThreadPool>("message-biz", ResolveServiceWorkerCount());
+std::chrono::milliseconds ResolvePositiveMilliseconds(const char* name, int fallback)
+{
+    if (const char* value = std::getenv(name)) {
+        int configured = std::atoi(value);
+        if (configured > 0) {
+            return std::chrono::milliseconds(configured);
+        }
+    }
+    return std::chrono::milliseconds(fallback);
 }
 
-Service::~Service() {
-  if (threadPool) {
-    auto stats = threadPool->GetStats();
-    LOG_INFO(businessLogger,
-             "message service dispatcher stop, workers: {}, queued: {}, light "
-             "direct: {}, heavy dispatched/rejected: {}/{}, thread pool "
-             "submitted/completed/rejected/acquire-timeout/expired: "
-             "{}/{}/{}/{}/{}, requests started/succeeded/failed/expired: "
-             "{}/{}/{}/{}",
-             stats.workerCount, stats.queueSize,
-             lightDispatched.load(std::memory_order_relaxed),
-             heavyDispatched.load(std::memory_order_relaxed),
-             heavyRejected.load(std::memory_order_relaxed), stats.submitted,
-             stats.completed, stats.rejected, stats.acquireTimeouts,
-             stats.expired, Metrics::Get(Metric::RequestsStarted),
-             Metrics::Get(Metric::RequestsSucceeded),
-             Metrics::Get(Metric::RequestsFailed),
-             Metrics::Get(Metric::RequestsExpired));
-    threadPool->Stop();
-  }
+} // namespace
+
+Service::Service() : friendService(clientForwardService), groupService(clientForwardService)
+{
+    Init();
+    requestTimeout = ResolvePositiveMilliseconds("WIMI_CHAT_REQUEST_TIMEOUT_MS", 3000);
+    queueAcquireTimeout = ResolvePositiveMilliseconds("WIMI_CHAT_QUEUE_ACQUIRE_MS", 2);
+    threadPool = std::make_unique<ThreadPool>("message-biz", ResolveServiceWorkerCount());
 }
 
-void Service::RegisterHandle(uint32_t msgID, TaskType taskType,
-                             HandleType handle) {
-  if (serviceGroup.find(msgID) != serviceGroup.end()) {
-    LOG_WARN(businessLogger, "该服务已注册,msgID: {}", msgID);
-    return;
-  }
-  serviceGroup[msgID] = HandlerEntry{std::move(handle), taskType};
+Service::~Service()
+{
+    if (threadPool) {
+        auto stats = threadPool->GetStats();
+        LOG_INFO(businessLogger,
+                 "message service dispatcher stop, workers: {}, queued: {}, light "
+                 "direct: {}, heavy dispatched/rejected: {}/{}, thread pool "
+                 "submitted/completed/rejected/acquire-timeout/expired: "
+                 "{}/{}/{}/{}/{}, requests started/succeeded/failed/expired: "
+                 "{}/{}/{}/{}",
+                 stats.workerCount, stats.queueSize, lightDispatched.load(std::memory_order_relaxed),
+                 heavyDispatched.load(std::memory_order_relaxed), heavyRejected.load(std::memory_order_relaxed),
+                 stats.submitted, stats.completed, stats.rejected, stats.acquireTimeouts, stats.expired,
+                 Metrics::Get(Metric::RequestsStarted), Metrics::Get(Metric::RequestsSucceeded),
+                 Metrics::Get(Metric::RequestsFailed), Metrics::Get(Metric::RequestsExpired));
+        threadPool->Stop();
+    }
 }
 
-void Service::Init() {
-  // 状态
-
-  // 消息与文件
-  RegisterHandle(ID_TEXT_SEND_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return messageService.SendText(msgID, request);
-                 });
-  RegisterHandle(ID_FILE_UPLOAD_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return fileService.Upload(msgID, request);
-                 });
-
-  // 好友
-  RegisterHandle(ID_NOTIFY_ADD_FRIEND_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return friendService.NotifyAddFriend(msgID, request);
-                 });
-  RegisterHandle(ID_REPLY_ADD_FRIEND_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return friendService.ReplyAddFriend(msgID, request);
-                 });
-  RegisterHandle(ID_PULL_FRIEND_LIST_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return friendService.PullFriendList(msgID, request);
-                 });
-  RegisterHandle(ID_PULL_FRIEND_APPLY_LIST_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return friendService.PullFriendApplyList(msgID, request);
-                 });
-
-  // 消息拉取
-  RegisterHandle(ID_PULL_SESSION_MESSAGE_LIST_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return messageService.PullConversationMessages(msgID,
-                                                                  request);
-                 });
-  // 群聊
-  RegisterHandle(ID_GROUP_CREATE_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return groupService.Create(msgID, request);
-                 });
-  RegisterHandle(ID_GROUP_NOTIFY_JOIN_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return groupService.NotifyJoin(msgID, request);
-                 });
-  RegisterHandle(ID_GROUP_REPLY_JOIN_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return groupService.ReplyJoin(msgID, request);
-                 });
-
-  /* 待实现 */
-  RegisterHandle(ID_GROUP_TEXT_SEND_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return messageService.SendGroupText(msgID, request);
-                 });
-  RegisterHandle(ID_FILE_SEND_REQ, TaskType::Heavy,
-                 [this](auto msgID, auto &request) {
-                   return messageService.SendFile(msgID, request);
-                 });
+void Service::RegisterHandle(uint32_t msgID, TaskType taskType, HandleType handle)
+{
+    if (serviceGroup.find(msgID) != serviceGroup.end()) {
+        LOG_WARN(businessLogger, "该服务已注册,msgID: {}", msgID);
+        return;
+    }
+    serviceGroup[msgID] = HandlerEntry{std::move(handle), taskType};
 }
 
-bool Service::PostBackgroundTask(ThreadPool::Task task) {
-  if (!threadPool) {
-    return false;
-  }
-  return threadPool->Post(std::move(task));
+void Service::Init()
+{
+    // 状态
+
+    // 消息与文件
+    RegisterHandle(ID_TEXT_SEND_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return messageService.SendText(msgID, request); });
+    RegisterHandle(ID_FILE_UPLOAD_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return fileService.Upload(msgID, request); });
+
+    // 好友
+    RegisterHandle(ID_NOTIFY_ADD_FRIEND_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return friendService.NotifyAddFriend(msgID, request); });
+    RegisterHandle(ID_REPLY_ADD_FRIEND_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return friendService.ReplyAddFriend(msgID, request); });
+    RegisterHandle(ID_PULL_FRIEND_LIST_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return friendService.PullFriendList(msgID, request); });
+    RegisterHandle(ID_PULL_FRIEND_APPLY_LIST_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return friendService.PullFriendApplyList(msgID, request); });
+
+    // 消息拉取
+    RegisterHandle(ID_PULL_SESSION_MESSAGE_LIST_REQ, TaskType::Heavy, [this](auto msgID, auto& request) {
+        return messageService.PullConversationMessages(msgID, request);
+    });
+    // 群聊
+    RegisterHandle(ID_GROUP_CREATE_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return groupService.Create(msgID, request); });
+    RegisterHandle(ID_GROUP_NOTIFY_JOIN_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return groupService.NotifyJoin(msgID, request); });
+    RegisterHandle(ID_GROUP_REPLY_JOIN_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return groupService.ReplyJoin(msgID, request); });
+
+    /* 待实现 */
+    RegisterHandle(ID_GROUP_TEXT_SEND_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return messageService.SendGroupText(msgID, request); });
+    RegisterHandle(ID_FILE_SEND_REQ, TaskType::Heavy,
+                   [this](auto msgID, auto& request) { return messageService.SendFile(msgID, request); });
 }
 
-ClientForwardService &Service::ClientForwards() {
-  return clientForwardService;
+bool Service::PostBackgroundTask(ThreadPool::Task task)
+{
+    if (!threadPool) {
+        return false;
+    }
+    return threadPool->Post(std::move(task));
 }
 
-MessageService &Service::Messages() {
-  return messageService;
+ClientForwardService& Service::ClientForwards() { return clientForwardService; }
+
+MessageService& Service::Messages() { return messageService; }
+
+void Service::SetGatewayStreamService(rpc::GatewayStreamService* service)
+{
+    clientForwardService.SetGatewayStreamService(service);
 }
 
-void Service::SetGatewayStreamService(rpc::GatewayStreamService *service) {
-  clientForwardService.SetGatewayStreamService(service);
+TcpPacket Service::ExecuteGatewayCommand(uint32_t msgID, int64_t actorUid, TcpPacket request)
+{
+    if (actorUid <= 0 || msgID == ID_LOGIN_INIT_REQ || msgID == ID_PING_REQ || msgID == ID_USER_QUIT_REQ) {
+        return MakeErrorPacket(ErrorCodes::AuthenticationRequired, "connection control command belongs to gateway");
+    }
+    auto handle = serviceGroup.find(msgID);
+    if (handle == serviceGroup.end())
+        return MakeErrorPacket(ErrorCodes::NotFound);
+    request.set_uid(actorUid);
+    return handle->second.handle(msgID, request);
 }
 
-TcpPacket Service::ExecuteGatewayCommand(uint32_t msgID, int64_t actorUid,
-                                         TcpPacket request) {
-  if (actorUid <= 0 || msgID == ID_LOGIN_INIT_REQ || msgID == ID_PING_REQ ||
-      msgID == ID_USER_QUIT_REQ) {
-    return MakeErrorPacket(ErrorCodes::AuthenticationRequired,
-                           "connection control command belongs to gateway");
-  }
-  auto handle = serviceGroup.find(msgID);
-  if (handle == serviceGroup.end())
-    return MakeErrorPacket(ErrorCodes::NotFound);
-  request.set_uid(actorUid);
-  return handle->second.handle(msgID, request);
-}
-
-}  // namespace wimi
+} // namespace wimi

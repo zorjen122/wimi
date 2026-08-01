@@ -2,71 +2,73 @@
 
 #include <utility>
 
-namespace wimi::client {
+namespace wimi::client
+{
 
-ContactListModel::ContactListModel(QObject *parent)
-    : QAbstractListModel(parent) {}
+ContactListModel::ContactListModel(QObject* parent) : QAbstractListModel(parent) {}
 
-int ContactListModel::rowCount(const QModelIndex &parent) const {
-  return parent.isValid() ? 0 : records_.size();
-}
+int ContactListModel::rowCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : records_.size(); }
 
-QVariant ContactListModel::data(const QModelIndex &index, int role) const {
-  if (!index.isValid() || index.row() < 0 || index.row() >= records_.size()) {
-    return {};
-  }
+QVariant ContactListModel::data(const QModelIndex& index, int role) const
+{
+    if (!index.isValid() || index.row() < 0 || index.row() >= records_.size()) {
+        return {};
+    }
 
-  const auto &record = records_.at(index.row());
-  switch (role) {
+    const auto& record = records_.at(index.row());
+    switch (role) {
     case UserIdRole:
-      return record.userId;
+        return record.userId;
     case SourceIndexRole:
-      return index.row();
+        return index.row();
     case DisplayNameRole:
-      return record.displayName;
+        return record.displayName;
     case StatusTextRole:
-      return record.statusText;
+        return record.statusText;
     case AvatarColorRole:
-      return record.avatarColor;
+        return record.avatarColor;
     case OnlineRole:
-      return record.online;
+        return record.online;
     case FavoriteRole:
-      return record.favorite;
+        return record.favorite;
     default:
-      return {};
-  }
+        return {};
+    }
 }
 
-QHash<int, QByteArray> ContactListModel::roleNames() const {
-  return {
-      {UserIdRole, "userId"},           {SourceIndexRole, "sourceIndex"},
-      {DisplayNameRole, "displayName"}, {StatusTextRole, "statusText"},
-      {AvatarColorRole, "avatarColor"}, {OnlineRole, "online"},
-      {FavoriteRole, "favorite"},
-  };
+QHash<int, QByteArray> ContactListModel::roleNames() const
+{
+    return {
+        {UserIdRole, "userId"},         {SourceIndexRole, "sourceIndex"}, {DisplayNameRole, "displayName"},
+        {StatusTextRole, "statusText"}, {AvatarColorRole, "avatarColor"}, {OnlineRole, "online"},
+        {FavoriteRole, "favorite"},
+    };
 }
 
-void ContactListModel::SetRecords(QVector<ContactRecord> records) {
-  beginResetModel();
-  records_ = std::move(records);
-  endResetModel();
+void ContactListModel::SetRecords(QVector<ContactRecord> records)
+{
+    beginResetModel();
+    records_ = std::move(records);
+    endResetModel();
 }
 
-const ContactRecord *ContactListModel::RecordAt(int index) const {
-  if (index < 0 || index >= records_.size()) {
-    return nullptr;
-  }
-  return &records_.at(index);
+const ContactRecord* ContactListModel::RecordAt(int index) const
+{
+    if (index < 0 || index >= records_.size()) {
+        return nullptr;
+    }
+    return &records_.at(index);
 }
 
-bool ContactListModel::ToggleFavorite(int row) {
-  if (row < 0 || row >= records_.size()) {
-    return false;
-  }
-  records_[row].favorite = !records_[row].favorite;
-  const auto modelIndex = index(row);
-  emit dataChanged(modelIndex, modelIndex, {FavoriteRole});
-  return true;
+bool ContactListModel::ToggleFavorite(int row)
+{
+    if (row < 0 || row >= records_.size()) {
+        return false;
+    }
+    records_[row].favorite = !records_[row].favorite;
+    const auto modelIndex = index(row);
+    emit dataChanged(modelIndex, modelIndex, {FavoriteRole});
+    return true;
 }
 
-}  // namespace wimi::client
+} // namespace wimi::client

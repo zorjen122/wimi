@@ -9,58 +9,57 @@
 #include <mutex>
 #include <string>
 
-namespace wimi::connection {
+namespace wimi::connection
+{
 
 class MessageLinkManager;
 
-class MessageLink final
-    : public grpc::ClientBidiReactor<gateway::GatewayToMessageFrame,
-                                     gateway::MessageToGatewayFrame> {
- public:
-  struct Node {
-    std::string id;
-    std::string host;
-    unsigned short port{0};
-  };
+class MessageLink final : public grpc::ClientBidiReactor<gateway::GatewayToMessageFrame, gateway::MessageToGatewayFrame>
+{
+  public:
+    struct Node {
+        std::string id;
+        std::string host;
+        unsigned short port{0};
+    };
 
-  MessageLink(Node node, std::string gatewayId, std::string instanceId,
-              MessageLinkManager &manager);
+    MessageLink(Node node, std::string gatewayId, std::string instanceId, MessageLinkManager& manager);
 
-  void Start();
-  void Stop();
-  bool Enqueue(gateway::GatewayToMessageFrame frame);
-  void Heartbeat(uint64_t sequence);
-  bool Healthy() const;
-  std::size_t Inflight() const;
-  void IncrementInflight();
-  void DecrementInflight();
-  const std::string &Id() const;
-  void Drain();
-  int64_t LastReadAt() const;
+    void Start();
+    void Stop();
+    bool Enqueue(gateway::GatewayToMessageFrame frame);
+    void Heartbeat(uint64_t sequence);
+    bool Healthy() const;
+    std::size_t Inflight() const;
+    void IncrementInflight();
+    void DecrementInflight();
+    const std::string& Id() const;
+    void Drain();
+    int64_t LastReadAt() const;
 
-  void OnReadDone(bool ok) override;
-  void OnWriteDone(bool ok) override;
-  void OnDone(const grpc::Status &status) override;
+    void OnReadDone(bool ok) override;
+    void OnWriteDone(bool ok) override;
+    void OnDone(const grpc::Status& status) override;
 
- private:
-  void ReleaseHold();
+  private:
+    void ReleaseHold();
 
-  Node node;
-  std::string gatewayId;
-  std::string instanceId;
-  MessageLinkManager &manager;
-  grpc::ClientContext context;
-  std::unique_ptr<gateway::GatewayMessageTransport::Stub> stub;
-  gateway::MessageToGatewayFrame readFrame;
-  gateway::GatewayToMessageFrame writeFrame;
-  std::mutex writeMutex;
-  std::deque<gateway::GatewayToMessageFrame> writeQueue;
-  bool writeInFlight{false};
-  std::atomic<bool> externalHold{false};
-  std::atomic<bool> stopped{false};
-  std::atomic<bool> healthy{false};
-  std::atomic<std::size_t> inflight{0};
-  std::atomic<int64_t> lastReadAt{0};
+    Node node;
+    std::string gatewayId;
+    std::string instanceId;
+    MessageLinkManager& manager;
+    grpc::ClientContext context;
+    std::unique_ptr<gateway::GatewayMessageTransport::Stub> stub;
+    gateway::MessageToGatewayFrame readFrame;
+    gateway::GatewayToMessageFrame writeFrame;
+    std::mutex writeMutex;
+    std::deque<gateway::GatewayToMessageFrame> writeQueue;
+    bool writeInFlight{false};
+    std::atomic<bool> externalHold{false};
+    std::atomic<bool> stopped{false};
+    std::atomic<bool> healthy{false};
+    std::atomic<std::size_t> inflight{0};
+    std::atomic<int64_t> lastReadAt{0};
 };
 
-}  // namespace wimi::connection
+} // namespace wimi::connection

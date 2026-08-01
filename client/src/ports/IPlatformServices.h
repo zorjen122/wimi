@@ -4,18 +4,19 @@
 
 #include <memory>
 
-namespace wimi::client {
+namespace wimi::client
+{
 
-class IPlatformServices {
- public:
-  virtual ~IPlatformServices() = default;
+class IPlatformServices
+{
+  public:
+    virtual ~IPlatformServices() = default;
 
-  virtual QString PlatformName() const = 0;
-  virtual bool DesktopNotificationsAvailable() const = 0;
-  virtual bool ShowDesktopNotification(const QString &title,
-                                       const QString &body) = 0;
+    virtual QString PlatformName() const = 0;
+    virtual bool DesktopNotificationsAvailable() const = 0;
+    virtual bool ShowDesktopNotification(const QString& title, const QString& body) = 0;
 };
 
 std::unique_ptr<IPlatformServices> CreatePlatformServices();
 
-}  // namespace wimi::client
+} // namespace wimi::client
